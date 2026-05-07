@@ -1,0 +1,73 @@
+import type { GamesData, Game } from './types'
+
+export interface Settings {
+  gamesDir: string | null
+}
+
+export interface PreviewMoveResult {
+  willMove: boolean
+  srcFolder?: string
+  destFolder?: string
+  relExePath?: string
+  code?: string
+}
+
+export interface PreviewExtractResult {
+  detectedCode: string | null
+  destFolder: string
+  method: 'filename' | 'archive' | 'name'
+}
+
+export interface MoveResult {
+  success: boolean
+  moved?: boolean
+  exePath?: string
+  folderPath?: string
+  error?: string
+}
+
+export interface ExtractResult {
+  success: boolean
+  extractDir?: string
+  detectedCode?: string | null
+  error?: string
+}
+
+interface ElectronAPI {
+  // Settings
+  loadSettings: () => Promise<Settings>
+  saveSettings: (settings: Settings) => Promise<boolean>
+
+  // Games data
+  loadGames: () => Promise<GamesData>
+  saveGames: (data: GamesData) => Promise<boolean>
+  fetchInfo: (code: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
+  extractCode: (str: string) => Promise<string | null>
+  launchGame: (args: { exePath: string; gameId: string }) => Promise<boolean>
+  openFolder: (folderPath: string) => Promise<boolean>
+  selectFolder: () => Promise<string | null>
+  selectExe: () => Promise<string | null>
+  selectExeFrom: (startPath: string) => Promise<string | null>
+  scanFolder: (folderPath: string) => Promise<{ success: boolean; data?: unknown[]; error?: string }>
+  getImageData: (imgPath: string) => Promise<string | null>
+  findExe: (folderPath: string) => Promise<string | null>
+  openExternal: (url: string) => Promise<void>
+  deleteFolder: (folderPath: string) => Promise<boolean>
+  onProgress: (callback: (data: { msg: string; pct: number }) => void) => () => void
+  onGameSessionEnd: (callback: (data: { gameId: string; elapsed: number }) => void) => () => void
+
+  // File operations (code auto-detected by main process)
+  selectFile: () => Promise<{ path: string; type: 'exe' | 'archive'; code: string | null } | null>
+  previewMove: (args: { exePath: string; gamesDir: string }) => Promise<PreviewMoveResult>
+  previewExtract: (args: { archivePath: string; gamesDir: string }) => Promise<PreviewExtractResult>
+  moveToLibrary: (args: { exePath: string; gamesDir: string }) => Promise<MoveResult>
+  extractArchive: (args: { archivePath: string; gamesDir: string }) => Promise<ExtractResult>
+}
+
+declare global {
+  interface Window {
+    electronAPI: ElectronAPI
+  }
+}
+
+export type { GamesData, Game }
