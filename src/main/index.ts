@@ -20,6 +20,8 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const initSqlJs = require('sql.js') as (opts: { wasmBinary: Buffer }) => Promise<{ Database: new (data: Buffer) => { exec: (sql: string) => { columns: string[]; values: unknown[][] }[] } }>
 
 import icon from '../../resources/icon.png?asset'
 
@@ -289,6 +291,15 @@ async function fetchDLsiteInfo(
         }
       }
     }
+    // Method 3: user-contributed / review-aggregated tags (wtags section)
+    for (const m of html.matchAll(/class="[^"]*(?:wtags|work_tag|user_tag|review_tag)[^"]*"[^>]*>([\s\S]{0,3000}?)<\/(?:div|ul|section)>/g)) {
+      for (const a of m[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)) {
+        const tag = a[1].trim()
+        if (tag && tag.length < 50 && !tags.includes(tag)) tags.push(tag)
+      }
+    }
+    // Limit total tags
+    if (tags.length > 50) tags.length = 50
 
     // ── Work type (作品形式) ──────────────────────────────────────────────
     let workType: string | null = null
@@ -345,6 +356,7 @@ async function fetchDLsiteInfo(
 
     // Download main cover
     let localCover: string | null = null
+    let localListImage: string | null = null
     if (coverUrl) {
       mainWindow?.webContents.send('progress:step', { msg: `下載圖片 ${imgDone + 1}/${totalImgs}`, pct: Math.round((imgDone / Math.max(totalImgs, 1)) * 100) })
       const mainExt = extname(coverUrl) || '.jpg'
@@ -352,6 +364,13 @@ async function fetchDLsiteInfo(
       try {
         await downloadImage(coverUrl, imgPath)
         localCover = imgPath
+      } catch { /* ignore */ }
+      // Also download the small list thumbnail (_img_sam = _img_main with _main replaced by _sam)
+      const samUrl = (coverUrl.startsWith('//') ? `https:${coverUrl}` : coverUrl).replace('_img_main', '_img_sam')
+      const samPath = join(codeImagesDir, `sam${mainExt}`)
+      try {
+        await downloadImage(samUrl, samPath)
+        localListImage = samPath
       } catch { /* ignore */ }
       imgDone++
     }
@@ -370,7 +389,7 @@ async function fetchDLsiteInfo(
     }
     if (totalImgs > 0) mainWindow?.webContents.send('progress:step', { msg: `✓ 圖片完成 (${imgDone} 張)`, pct: 100 })
 
-    return { success: true, data: { title, circle, tags, coverUrl, localCover, releaseDate, workType, dlsiteRating, sampleImages: localSamples } }
+    return { success: true, data: { title, circle, tags, coverUrl, localCover, localListImage, releaseDate, workType, dlsiteRating, sampleImages: localSamples } }
   } catch (e) {
     return { success: false, error: String(e) }
   }
@@ -463,7 +482,8 @@ app.whenReady().then(() => {
         sampleImages: ((g.sampleImages as string[]) ?? []).map(toAbsoluteImagePath),
         isFavorite: g.isFavorite ?? false,
         folderSize: g.folderSize ?? null,
-        cover: g.cover ? toAbsoluteImagePath(g.cover as string) : null
+        cover: g.cover ? toAbsoluteImagePath(g.cover as string) : null,
+        listImage: g.listImage ? toAbsoluteImagePath(g.listImage as string) : null
       }))
       return raw
     } catch {
@@ -479,6 +499,7 @@ app.whenReady().then(() => {
         games: data.games.map((g: Record<string, unknown>) => ({
           ...g,
           cover: g.cover ? toRelativeImagePath(g.cover as string) : null,
+          listImage: g.listImage ? toRelativeImagePath(g.listImage as string) : null,
           sampleImages: ((g.sampleImages as string[]) ?? []).map(toRelativeImagePath)
         }))
       }
@@ -691,6 +712,187 @@ app.whenReady().then(() => {
     try { ensureDirs(); saveUiSettings(patch); return true } catch (e) { logError('ui:save', e); return false }
   })
 
+  // ── Import from GameManager 0.49 (SQLite) ────────────────────────────────
+  ipcMain.handle('import:selectDb', async () => {
+    const r = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: 'SQLite Database', extensions: ['db', 'sqlite', 'sqlite3'] }],
+      title: '選擇 Games.db'
+    })
+    return r.canceled ? null : r.filePaths[0]
+  })
+
+  ipcMain.handle('import:preview', async (_, dbPath: string) => {
+    try {
+      const wasmPath = join(app.getAppPath(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
+      const wasmBinary = readFileSync(wasmPath)
+      const SQL = await initSqlJs({ wasmBinary })
+      const db = new SQL.Database(readFileSync(dbPath))
+      const result = db.exec('SELECT COUNT(*) FROM game')
+      const count = result[0]?.values[0]?.[0] ?? 0
+      return { success: true, count }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('import:run', async (_, { dbPath, skipDuplicates, existingIds }: {
+    dbPath: string; skipDuplicates: boolean; existingIds: string[]
+  }) => {
+    try {
+      const wasmPath = join(app.getAppPath(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
+      const wasmBinary = readFileSync(wasmPath)
+      const SQL = await initSqlJs({ wasmBinary })
+      const db = new SQL.Database(readFileSync(dbPath))
+      const imagesDir = join(dirname(dbPath), 'Images')
+
+      // Load circles
+      const circleMap = new Map<number, string>()
+      const circleResult = db.exec('SELECT CircleID, Name FROM circle')
+      if (circleResult.length > 0) {
+        for (const row of circleResult[0].values) {
+          circleMap.set(row[0] as number, (row[1] as string) ?? '')
+        }
+      }
+
+      // Load images
+      const imageMap = new Map<number, { path: string; isList: boolean; isCover: boolean }[]>()
+      const imgResult = db.exec('SELECT GameID, ImagePath, IsListImage, IsCoverImage FROM image')
+      if (imgResult.length > 0) {
+        for (const row of imgResult[0].values) {
+          const gameId = row[0] as number
+          const entry = { path: (row[1] as string) ?? '', isList: !!(row[2] as number), isCover: !!(row[3] as number) }
+          const arr = imageMap.get(gameId) ?? []
+          arr.push(entry)
+          imageMap.set(gameId, arr)
+        }
+      }
+
+      // Load games
+      const gameResult = db.exec(`
+        SELECT GameID, RJCode, Title, FolderPath, Rating, DLSRating,
+               ReleaseDate, AddedDate, LastPlayedDate, TimesPlayed, SecondsPlayed,
+               CircleID, Tags, Comments, Language, Size
+        FROM game
+      `)
+
+      const imported: Record<string, unknown>[] = []
+      let skipped = 0
+      const errors: string[] = []
+
+      if (gameResult.length > 0) {
+        for (const row of gameResult[0].values) {
+          try {
+            const [gameId, rjCode, title, folderPath, rating, dlsRating,
+              releaseDate, addedDate, lastPlayedDate, timesPlayed, secondsPlayed,
+              circleId, tags, comments, language, size] = row
+
+            const id = (rjCode as string | null)?.trim().toUpperCase() || `NF_IMP_${gameId}`
+
+            if (skipDuplicates && existingIds.includes(id)) { skipped++; continue }
+
+            // Format dates
+            const fmtDate = (v: unknown): string | null => {
+              if (!v) return null
+              const d = new Date(v as string)
+              if (isNaN(d.getTime())) return null
+              const pad = (n: number) => String(n).padStart(2, '0')
+              return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+            }
+
+            // Process images
+            const imgs = imageMap.get(gameId as number) ?? []
+            let cover: string | null = null
+            let listImage: string | null = null
+            const sampleImages: string[] = []
+            const codeImagesDir = join(gameImagesDir, id)
+            mkdirSync(codeImagesDir, { recursive: true })
+            let smpN = 1
+
+            for (const img of imgs) {
+              const srcPath = img.path.startsWith('Images\\') || img.path.startsWith('Images/')
+                ? join(dirname(dbPath), img.path)
+                : join(imagesDir, img.path)
+              if (!existsSync(srcPath)) continue
+              const ext = extname(srcPath) || '.jpg'
+              try {
+                if (img.isList) {
+                  const dest = join(codeImagesDir, `sam${ext}`)
+                  copyFileSync(srcPath, dest)
+                  listImage = dest
+                } else if (img.isCover) {
+                  const dest = join(codeImagesDir, `main${ext}`)
+                  copyFileSync(srcPath, dest)
+                  cover = dest
+                } else {
+                  const dest = join(codeImagesDir, `smp${smpN}${ext}`)
+                  copyFileSync(srcPath, dest)
+                  sampleImages.push(dest)
+                  smpN++
+                }
+              } catch { /* skip unavailable image */ }
+            }
+
+            // Determine path/exe from FolderPath
+            let gamePath: string | null = null
+            let exe: string | null = null
+            if (folderPath) {
+              const fp = folderPath as string
+              try {
+                if (existsSync(fp)) {
+                  const st = statSync(fp)
+                  if (st.isDirectory()) {
+                    gamePath = fp
+                  } else if (st.isFile()) {
+                    exe = fp
+                    gamePath = dirname(fp)
+                  }
+                }
+              } catch { gamePath = null }
+            }
+
+            // Build tag array
+            const tagList = tags ? String(tags).split(',').map((t: string) => t.trim()).filter(Boolean) : []
+
+            const game: Record<string, unknown> = {
+              uuid: randomUUID(),
+              id,
+              title: (title as string | null) ?? id,
+              circle: circleId ? (circleMap.get(circleId as number) ?? '') : '',
+              tags: tagList,
+              cover: cover ? toRelativeImagePath(cover) : null,
+              listImage: listImage ? toRelativeImagePath(listImage) : null,
+              coverUrl: null,
+              sampleImages: sampleImages.map(toRelativeImagePath),
+              path: gamePath,
+              exe,
+              rating: typeof rating === 'number' ? rating : 0,
+              note: (comments as string | null) ?? '',
+              addedAt: fmtDate(addedDate) ?? new Date().toISOString().slice(0, 19).replace('T', ' '),
+              language: (language as string | null) ?? 'ja',
+              releaseDate: fmtDate(releaseDate),
+              workType: null,
+              dlsiteRating: dlsRating != null ? String(dlsRating) : null,
+              lastPlayedAt: fmtDate(lastPlayedDate),
+              playCount: (timesPlayed as number | null) ?? 0,
+              playTime: (secondsPlayed as number | null) ?? 0,
+              isFavorite: false,
+              folderSize: size != null ? (size as number) * 1024 : null
+            }
+            imported.push(game)
+          } catch (e) {
+            errors.push(String(e))
+          }
+        }
+      }
+
+      return { success: true, imported, skipped, errors }
+    } catch (e) {
+      logError('import:run', e)
+      return { success: false, error: String(e), imported: [], skipped: 0, errors: [] }
+    }
+  })
+
   ipcMain.handle('games:scanFolder', (_, folderPath: string) => {
     try {
       const items = readdirSync(folderPath)
@@ -780,7 +982,7 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('games:uploadImage', async (_, { gameId, role }: { gameId: string; role: 'cover' | 'sample' }) => {
+  ipcMain.handle('games:uploadImage', async (_, { gameId, role }: { gameId: string; role: 'cover' | 'sample' | 'listImage' }) => {
     const r = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [{ name: '圖片', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'] }]
@@ -790,7 +992,7 @@ app.whenReady().then(() => {
     const ext = extname(srcPath).toLowerCase() || '.jpg'
     const destDir = join(gameImagesDir, gameId)
     mkdirSync(destDir, { recursive: true })
-    const destName = role === 'cover' ? `main${ext}` : `smp_${Date.now()}${ext}`
+    const destName = role === 'cover' ? `main${ext}` : role === 'listImage' ? `sam${ext}` : `smp_${Date.now()}${ext}`
     const destPath = join(destDir, destName)
     copyFileSync(srcPath, destPath)
     return destPath

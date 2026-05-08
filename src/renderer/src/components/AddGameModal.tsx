@@ -166,6 +166,7 @@ export default function AddGameModal({
       circle: (info?.circle as string) || '',
       tags: (info?.tags as string[]) || [],
       cover: (info?.localCover as string) || null,
+      listImage: (info?.localListImage as string) || null,
       coverUrl: (info?.coverUrl as string) || null,
       sampleImages: (info?.sampleImages as string[]) || [],
       releaseDate: (info?.releaseDate as string) || null,

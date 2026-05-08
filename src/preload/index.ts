@@ -22,7 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectExeFrom: (startPath: string) => ipcRenderer.invoke('games:selectExeFrom', startPath),
   scanFolder: (folderPath: string) => ipcRenderer.invoke('games:scanFolder', folderPath),
   getImageData: (imgPath: string) => ipcRenderer.invoke('games:getImageData', imgPath),
-  uploadImage: (gameId: string, role: 'cover' | 'sample') => ipcRenderer.invoke('games:uploadImage', { gameId, role }),
+  uploadImage: (gameId: string, role: 'cover' | 'sample' | 'listImage') => ipcRenderer.invoke('games:uploadImage', { gameId, role }),
   findExe: (folderPath: string) => ipcRenderer.invoke('games:findExe', folderPath),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
 
@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   previewExtract: (args: unknown) => ipcRenderer.invoke('games:previewExtract', args),
   moveToLibrary: (args: unknown) => ipcRenderer.invoke('games:moveToLibrary', args),
   extractArchive: (args: unknown) => ipcRenderer.invoke('games:extractArchive', args),
+
+  // Import from old version
+  selectImportDb: () => ipcRenderer.invoke('import:selectDb'),
+  importPreview: (dbPath: string) => ipcRenderer.invoke('import:preview', dbPath),
+  importRun: (args: unknown) => ipcRenderer.invoke('import:run', args),
 
   // UI settings (file-based, survives dev port changes)
   loadUiSettings: () => ipcRenderer.invoke('ui:load'),

@@ -57,7 +57,8 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
     setDeleteFiles(false)
     setImgEditMode(false)
 
-    const allPaths = [game.cover, ...(game.sampleImages ?? [])]
+    // index 0=cover, 1=listImage, 2+=sampleImages
+    const allPaths = [game.cover, game.listImage, ...(game.sampleImages ?? [])]
     setImgSrcs(new Array(allPaths.length).fill(null))
 
     allPaths.forEach((imgPath, i) => {
@@ -98,6 +99,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
         circle: (d.circle as string) || game.circle,
         tags: (d.tags as string[]) || game.tags,
         cover: (d.localCover as string) || game.cover,
+        listImage: (d.localListImage as string) || game.listImage,
         coverUrl: (d.coverUrl as string) || game.coverUrl,
         sampleImages: (d.sampleImages as string[]) || game.sampleImages,
         releaseDate: (d.releaseDate as string) || game.releaseDate,
@@ -117,7 +119,10 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
   const coverFallback = game.coverUrl
     ? game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl
     : null
-  const activeImgSrc = imgSrcs[activeIdx] ?? (activeIdx === 0 ? coverFallback : null)
+  const listImgFallback = game.coverUrl
+    ? (() => { const u = (game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl).replace('_img_main', '_img_sam'); return u })()
+    : null
+  const activeImgSrc = imgSrcs[activeIdx] ?? (activeIdx === 0 ? coverFallback : activeIdx === 1 ? listImgFallback : null)
 
   const handleLaunch = async (): Promise<void> => {
     let exeToLaunch = game.exe
@@ -161,6 +166,15 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
     })
   }
 
+  const handleUploadListImage = async (): Promise<void> => {
+    const newPath = await window.electronAPI.uploadImage(game.id, 'listImage')
+    if (!newPath) return
+    onUpdate({ ...game, listImage: newPath })
+    window.electronAPI.getImageData(newPath).then((data) => {
+      setImgSrcs((prev) => { const next = [...prev]; next[1] = data; return next })
+    })
+  }
+
   const handleUploadSample = async (): Promise<void> => {
     const newPath = await window.electronAPI.uploadImage(game.id, 'sample')
     if (!newPath) return
@@ -176,9 +190,13 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
       if (game.cover) await window.electronAPI.deleteFile(game.cover)
       onUpdate({ ...game, cover: null })
       setImgSrcs((prev) => { const next = [...prev]; next[0] = null; return next })
-      if (activeIdx === 0 && totalImages > 1) setActiveIdx(0)
+    } else if (idx === 1) {
+      if (game.listImage) await window.electronAPI.deleteFile(game.listImage)
+      onUpdate({ ...game, listImage: null })
+      setImgSrcs((prev) => { const next = [...prev]; next[1] = null; return next })
+      if (activeIdx === 1) setActiveIdx(0)
     } else {
-      const sampleIdx = idx - 1
+      const sampleIdx = idx - 2
       const path = game.sampleImages?.[sampleIdx]
       if (path) await window.electronAPI.deleteFile(path)
       const newSamples = (game.sampleImages ?? []).filter((_, i) => i !== sampleIdx)
@@ -220,7 +238,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
     onDelete(game.uuid)
   }
 
-  const totalImages = 1 + (game.sampleImages?.length ?? 0)
+  const totalImages = 2 + (game.sampleImages?.length ?? 0)  // cover + listImage + samples
 
   return (
     <aside className="detail-panel">
@@ -236,22 +254,24 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
           ? <img src={activeImgSrc} alt={game.title} />
           : <div className="no-cover large">{game.id}</div>
         }
-        {activeIdx === 0 && !imgEditMode && (
-          <button
-            className="btn-upload-cover"
-            title="上傳封面圖"
-            onClick={(e) => { e.stopPropagation(); handleUploadCover() }}
-          >
+        {!imgEditMode && activeIdx === 0 && (
+          <button className="btn-upload-cover" title="上傳封面圖" onClick={(e) => { e.stopPropagation(); handleUploadCover() }}>
             ↑ 上傳封面
           </button>
         )}
+        {!imgEditMode && activeIdx === 1 && (
+          <button className="btn-upload-cover" title="上傳列表縮圖" onClick={(e) => { e.stopPropagation(); handleUploadListImage() }}>
+            ↑ 上傳縮圖
+          </button>
+        )}
         {imgEditMode && activeIdx === 0 && (game.cover || activeImgSrc) && (
-          <button
-            className="btn-delete-img-cover"
-            title="刪除封面圖"
-            onClick={(e) => { e.stopPropagation(); handleDeleteImage(0) }}
-          >
+          <button className="btn-delete-img-cover" title="刪除封面圖" onClick={(e) => { e.stopPropagation(); handleDeleteImage(0) }}>
             × 刪除封面
+          </button>
+        )}
+        {imgEditMode && activeIdx === 1 && (
+          <button className="btn-delete-img-cover" title="刪除縮圖" onClick={(e) => { e.stopPropagation(); handleDeleteImage(1) }}>
+            × 刪除縮圖
           </button>
         )}
       </div>
@@ -269,6 +289,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
                   ? <img src={imgSrcs[i]!} alt={`img ${i + 1}`} />
                   : <div className="thumb-placeholder" />
                 }
+                {i === 1 && <span className="thumb-label-badge">縮圖</span>}
               </button>
               {imgEditMode && (
                 <button className="thumb-delete-btn" onClick={() => handleDeleteImage(i)} title="刪除">×</button>

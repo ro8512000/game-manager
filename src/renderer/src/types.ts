@@ -21,6 +21,7 @@ export interface Game {
   playTime: number
   isFavorite: boolean
   folderSize: number | null
+  listImage: string | null   // small thumbnail (_img_sam) for list view
 }
 
 export type ViewMode = 'grid' | 'list'

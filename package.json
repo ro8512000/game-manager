@@ -23,7 +23,8 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
-    "7zip-bin": "^5.2.0"
+    "7zip-bin": "^5.2.0",
+    "sql.js": "^1.14.1"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

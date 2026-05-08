@@ -17,6 +17,50 @@ export function formatFileSize(bytes: number): string {
 
 import type { Game } from './types'
 
+export function findDuplicates(games: Game[]): Map<string, Game[]> {
+  const groups = new Map<string, Game[]>()
+  for (const g of games) {
+    const existing = groups.get(g.id) ?? []
+    existing.push(g)
+    groups.set(g.id, existing)
+  }
+  for (const [id, group] of groups) {
+    if (group.length < 2) groups.delete(id)
+  }
+  return groups
+}
+
+export function getGroupValue(game: Game, groupBy: string): string {
+  switch (groupBy) {
+    case 'circle':      return game.circle || '（無社團）'
+    case 'rating':      return game.rating ? '★'.repeat(game.rating) : '未評分'
+    case 'workType':    return game.workType || '（無作品形式）'
+    case 'source': {
+      if (/^[RVB]J\d{6,8}$/i.test(game.id)) return 'DLsite'
+      if (/^ST\d+$/i.test(game.id)) return 'Steam'
+      return '其他'
+    }
+    case 'releaseYear': {
+      const year = game.releaseDate?.match(/(\d{4})/)?.[1]
+      return year ?? '未知年份'
+    }
+    case 'addedAtMonth': {
+      const m = game.addedAt?.match(/^(\d{4})-(\d{2})/)
+      return m ? `${m[1]}年${m[2]}月` : '未知'
+    }
+    case 'releaseDateMonth': {
+      const m = game.releaseDate?.match(/(\d{4})[年\/\-](\d{1,2})/)
+      return m ? `${m[1]}年${String(m[2]).padStart(2, '0')}月` : '未知日期'
+    }
+    case 'lastPlayedAtMonth': {
+      if (!game.lastPlayedAt) return '從未遊玩'
+      const m = game.lastPlayedAt.match(/^(\d{4})-(\d{2})/)
+      return m ? `${m[1]}年${m[2]}月` : '未知'
+    }
+    default: return ''
+  }
+}
+
 export function getGameSortValue(game: Game, key: string): string | number | null {
   switch (key) {
     case 'id':           return game.id

@@ -238,6 +238,10 @@ body {
   cursor: default;
 }
 .list-header-cell { padding: 10px 12px; }
+.list-header-thumb { padding: 0 !important; }
+.col-thumb { display: flex; align-items: center; justify-content: center; padding: 2px !important; }
+.list-thumb-img { width: 28px; height: 28px; object-fit: cover; border-radius: 2px; display: block; }
+.list-thumb-empty { width: 28px; height: 28px; background: var(--bg3); border-radius: 2px; }
 .list-row { cursor: pointer; transition: background 0.1s; }
 .list-row:hover { background: var(--bg3); }
 .list-row.selected { background: rgba(124, 106, 247, 0.15); }
@@ -660,6 +664,30 @@ button.primary:hover { background: var(--accent-hover); }
 .preview-src { color: var(--text2); word-break: break-all; }
 .preview-dest { color: var(--accent); font-weight: 600; word-break: break-all; }
 .preview-dest.nf-code { color: var(--text2); font-weight: normal; }
+.list-group-header {
+  grid-column: 1 / -1;
+  padding: 4px 12px;
+  background: var(--bg3);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  position: sticky;
+  top: 36px;
+  z-index: 1;
+}
+.list-group-count { font-weight: normal; color: var(--text2); }
+.import-stat-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.import-stat-row:last-child { border-bottom: none; }
+.dup-group { margin-bottom: 12px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.dup-group-header { background: var(--bg3); padding: 6px 12px; font-size: 12px; font-weight: 600; color: var(--accent); border-bottom: 1px solid var(--border); }
+.dup-item { display: flex; align-items: flex-start; gap: 10px; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border); }
+.dup-item:last-child { border-bottom: none; }
+.dup-item:hover { background: var(--bg3); }
+.dup-item input { margin-top: 2px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.dup-item-title { font-size: 13px; color: var(--text); }
+.dup-item-meta { font-size: 11px; color: var(--text2); margin-top: 2px; word-break: break-all; }
 .manual-code-section { display: flex; flex-direction: column; gap: 6px; padding: 8px 0; border-top: 1px solid var(--border); }
 .manual-code-row { display: flex; align-items: center; gap: 8px; }
 .manual-code-row .stat-label { width: 90px; flex-shrink: 0; }
@@ -1276,6 +1304,16 @@ button.primary:hover { background: var(--accent-hover); }
   z-index: 2;
 }
 .thumb-delete-btn:hover { background: #ff4444; }
+.thumb-label-badge {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.65);
+  color: var(--text2);
+  font-size: 9px;
+  text-align: center;
+  line-height: 14px;
+  pointer-events: none;
+}
 
 /* Game stats in detail panel */
 .detail-stats {

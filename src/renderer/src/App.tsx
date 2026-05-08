@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Game, GamesData, ViewMode } from './types'
 import { ALL_COLUMNS, DEFAULT_COLUMNS } from './types'
 import type { Settings } from './electron.d'
-import { localDateTime, getGameSortValue } from './utils'
+import { localDateTime, getGameSortValue, findDuplicates } from './utils'
 import Sidebar from './components/Sidebar'
 import GameGrid from './components/GameGrid'
 import GameList from './components/GameList'
@@ -10,6 +10,9 @@ import GameDetail from './components/GameDetail'
 import AddGameModal from './components/AddGameModal'
 import SettingsModal from './components/SettingsModal'
 import GameContextMenu, { getDLsiteUrl } from './components/GameContextMenu'
+import DuplicateModal from './components/DuplicateModal'
+import ImportModal from './components/ImportModal'
+import BatchFetchModal from './components/BatchFetchModal'
 import './App.css'
 
 type InitialFile = { path: string; type: 'exe' | 'archive'; code: string | null }
@@ -136,8 +139,12 @@ export default function App(): React.JSX.Element {
   const handleFilterTagSingle = (tag: string): void => setFilterTags([tag])
   const [addInitialFile, setAddInitialFile] = useState<InitialFile | null>(null)
   const [showSettings, setShowSettings] = useState(false)
+  const [showDuplicates, setShowDuplicates] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const [showBatchFetch, setShowBatchFetch] = useState(false)
   const [gridSortKey, setGridSortKey] = useState<string | null>(null)
   const [gridSortDir, setGridSortDir] = useState<'asc' | 'desc'>('asc')
+  const [listGroupBy, setListGroupBy] = useState<string>('')
   const [ctxMenu, setCtxMenu] = useState<{ game: Game; x: number; y: number } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ game: Game; withFiles: boolean } | null>(null)
   const [detailWidth, setDetailWidth] = useState(300)
@@ -170,6 +177,7 @@ export default function App(): React.JSX.Element {
       if (ui.sourceCollapsed !== undefined) setSourceCollapsed(ui.sourceCollapsed as boolean)
       if (ui.gridSortKey) setGridSortKey(ui.gridSortKey as string)
       if (ui.gridSortDir) setGridSortDir(ui.gridSortDir as 'asc' | 'desc')
+      if (ui.listGroupBy) setListGroupBy(ui.listGroupBy as string)
       setLoading(false)
     })
   }, [])
@@ -248,6 +256,11 @@ export default function App(): React.JSX.Element {
     return matchSearch && matchTag && matchRating
   })
 
+  const handleListGroupByChange = (val: string): void => {
+    setListGroupBy(val)
+    window.electronAPI.saveUiSettings({ listGroupBy: val })
+  }
+
   const handleGridSortChange = (key: string | null): void => {
     setGridSortKey(key)
     window.electronAPI.saveUiSettings({ gridSortKey: key })
@@ -284,6 +297,10 @@ export default function App(): React.JSX.Element {
       <div className="titlebar">
         <span className="titlebar-title">Game Manager</span>
         <div className="titlebar-actions">
+          <button onClick={() => setShowImport(true)} title="從舊版 GameManager 匯入">匯入舊版</button>
+          {data.games.length > 0 && (
+            <button onClick={() => setShowDuplicates(true)} title="尋找重複遊戲">重複偵測</button>
+          )}
           <button className="primary" onClick={handleOpenAdd}>+ 新增遊戲</button>
           <button className="icon-btn" onClick={() => setShowSettings(true)} title="設定">⚙</button>
         </div>
@@ -321,6 +338,23 @@ export default function App(): React.JSX.Element {
                 <button className="search-clear" onClick={() => setSearch('')} title="清除搜尋">✕</button>
               )}
             </div>
+            {viewMode === 'list' && (
+              <select
+                className="grid-sort-select"
+                value={listGroupBy}
+                onChange={(e) => handleListGroupByChange(e.target.value)}
+              >
+                <option value="">分組：無</option>
+                <option value="circle">社團</option>
+                <option value="rating">個人評分</option>
+                <option value="workType">作品形式</option>
+                <option value="source">來源</option>
+                <option value="releaseYear">發售年份</option>
+              <option value="addedAtMonth">加入月份</option>
+              <option value="releaseDateMonth">發售月份</option>
+              <option value="lastPlayedAtMonth">上次遊玩月份</option>
+              </select>
+            )}
             {viewMode === 'grid' && (
               <div className="grid-sort-wrap">
                 <select
@@ -339,6 +373,14 @@ export default function App(): React.JSX.Element {
                   </button>
                 )}
               </div>
+            )}
+            {filtered.some((g) => /^[RVB]J\d{6,8}$/i.test(g.id)) && (
+              <button
+                onClick={() => setShowBatchFetch(true)}
+                title="重新抓取目前列表內所有 DLsite 遊戲的資訊"
+              >
+                ↻ 批量更新 ({filtered.filter((g) => /^[RVB]J\d{6,8}$/i.test(g.id)).length})
+              </button>
             )}
             <div className="view-toggle">
               <button className={viewMode === 'grid' ? 'active' : ''} onClick={() => handleSetViewMode('grid')}>⊞ 磁磚</button>
@@ -366,6 +408,8 @@ export default function App(): React.JSX.Element {
               initialColWidths={initColWidths}
               initialSortKey={initSortKey}
               initialSortDir={initSortDir}
+              groupBy={listGroupBy || null}
+              onGroupByChange={handleListGroupByChange}
             />
           )}
         </div>
@@ -393,6 +437,37 @@ export default function App(): React.JSX.Element {
           existingIds={data.games.map((g) => g.id)}
           gamesDir={settings.gamesDir}
           onOpenSettings={() => { handleCloseAdd(); setShowSettings(true) }}
+        />
+      )}
+
+      {showBatchFetch && (
+        <BatchFetchModal
+          games={filtered.filter((g) => /^[RVB]J\d{6,8}$/i.test(g.id))}
+          onUpdate={updateGame}
+          onClose={() => setShowBatchFetch(false)}
+        />
+      )}
+
+      {showImport && (
+        <ImportModal
+          existingIds={data.games.map((g) => g.id)}
+          onImport={async (games) => {
+            const newData = { games: [...data.games, ...games] }
+            await save(newData)
+          }}
+          onClose={() => setShowImport(false)}
+        />
+      )}
+
+      {showDuplicates && (
+        <DuplicateModal
+          duplicates={findDuplicates(data.games)}
+          onDelete={async (uuids) => {
+            const newData = { games: data.games.filter((g) => !uuids.includes(g.uuid)) }
+            await save(newData)
+            if (selected && uuids.includes(selected.uuid)) setSelected(null)
+          }}
+          onClose={() => setShowDuplicates(false)}
         />
       )}
 

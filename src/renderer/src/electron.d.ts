@@ -51,12 +51,15 @@ interface ElectronAPI {
   selectExeFrom: (startPath: string) => Promise<string | null>
   scanFolder: (folderPath: string) => Promise<{ success: boolean; data?: unknown[]; error?: string }>
   getImageData: (imgPath: string) => Promise<string | null>
-  uploadImage: (gameId: string, role: 'cover' | 'sample') => Promise<string | null>
+  uploadImage: (gameId: string, role: 'cover' | 'sample' | 'listImage') => Promise<string | null>
   findExe: (folderPath: string) => Promise<string | null>
   openExternal: (url: string) => Promise<void>
   deleteFolder: (folderPath: string) => Promise<boolean>
   deleteFile: (filePath: string) => Promise<boolean>
   getFolderSize: (folderPath: string) => Promise<number | null>
+  selectImportDb: () => Promise<string | null>
+  importPreview: (dbPath: string) => Promise<{ success: boolean; count?: number; error?: string }>
+  importRun: (args: { dbPath: string; skipDuplicates: boolean; existingIds: string[] }) => Promise<{ success: boolean; imported: Record<string, unknown>[]; skipped: number; errors: string[]; error?: string }>
   loadUiSettings: () => Promise<Record<string, unknown>>
   saveUiSettings: (patch: Record<string, unknown>) => Promise<boolean>
   onProgress: (callback: (data: { msg: string; pct: number }) => void) => () => void
