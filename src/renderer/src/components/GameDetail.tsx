@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { Game } from '../types'
-import { localDateTime, formatPlayTime } from '../utils'
+import { localDateTime, formatPlayTime, formatFileSize } from '../utils'
 import ImageLightbox from './ImageLightbox'
 
 interface Props {
@@ -24,6 +24,12 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
   const [note, setNote] = useState(game.note)
   const [rating, setRating] = useState(game.rating)
   const [editableTags, setEditableTags] = useState<string[]>(game.tags)
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleInput, setTitleInput] = useState(game.title)
+  const [editingId, setEditingId] = useState(false)
+  const [idInput, setIdInput] = useState(game.id)
+  const [refetching, setRefetching] = useState(false)
+  const [refetchProgress, setRefetchProgress] = useState<{ msg: string; pct: number } | null>(null)
   const [tagInput, setTagInput] = useState('')
   const [showTagSuggestions, setShowTagSuggestions] = useState(false)
   const [tagEditMode, setTagEditMode] = useState(false)
@@ -31,17 +37,25 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
   const [deleteFiles, setDeleteFiles] = useState(false)
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [lightboxIdx, setLightboxIdx] = useState(0)
+  const [imgEditMode, setImgEditMode] = useState(false)
 
   useEffect(() => {
     setNote(game.note)
     setRating(game.rating)
     setEditableTags(game.tags)
+    setEditingTitle(false)
+    setTitleInput(game.title)
+    setEditingId(false)
+    setIdInput(game.id)
+    setRefetching(false)
+    setRefetchProgress(null)
     setTagInput('')
     setShowTagSuggestions(false)
     setTagEditMode(false)
     setActiveIdx(0)
     setShowDeleteDialog(false)
     setDeleteFiles(false)
+    setImgEditMode(false)
 
     const allPaths = [game.cover, ...(game.sampleImages ?? [])]
     setImgSrcs(new Array(allPaths.length).fill(null))
@@ -57,6 +71,48 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
       })
     })
   }, [game])
+
+  useEffect(() => {
+    return window.electronAPI.onProgress((data) => setRefetchProgress(data))
+  }, [])
+
+  const handleSaveId = (): void => {
+    setEditingId(false)
+    const newId = idInput.trim().toUpperCase()
+    if (newId && newId !== game.id) onUpdate({ ...game, id: newId })
+  }
+
+  const handleRefetchInfo = async (): Promise<void> => {
+    const canFetch = /^[RVB]J\d{6,8}$/i.test(game.id) || game.id.startsWith('ST')
+    if (!canFetch || refetching) return
+    setRefetching(true)
+    setRefetchProgress(null)
+    const result = game.id.startsWith('ST')
+      ? await window.electronAPI.fetchSteamInfo(game.id.slice(2))
+      : await window.electronAPI.fetchInfo(game.id)
+    if (result.success && result.data) {
+      const d = result.data
+      onUpdate({
+        ...game,
+        title: (d.title as string) || game.title,
+        circle: (d.circle as string) || game.circle,
+        tags: (d.tags as string[]) || game.tags,
+        cover: (d.localCover as string) || game.cover,
+        coverUrl: (d.coverUrl as string) || game.coverUrl,
+        sampleImages: (d.sampleImages as string[]) || game.sampleImages,
+        releaseDate: (d.releaseDate as string) || game.releaseDate,
+        workType: (d.workType as string) || game.workType,
+        dlsiteRating: (d.dlsiteRating as string) || game.dlsiteRating,
+      })
+    }
+    setRefetching(false)
+  }
+
+  const handleRefreshSize = async (): Promise<void> => {
+    if (!game.path) return
+    const size = await window.electronAPI.getFolderSize(game.path)
+    if (size !== null) onUpdate({ ...game, folderSize: size })
+  }
 
   const coverFallback = game.coverUrl
     ? game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl
@@ -94,6 +150,42 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
   const openLightbox = (idx: number): void => {
     setLightboxIdx(idx)
     setLightboxOpen(true)
+  }
+
+  const handleUploadCover = async (): Promise<void> => {
+    const newPath = await window.electronAPI.uploadImage(game.id, 'cover')
+    if (!newPath) return
+    onUpdate({ ...game, cover: newPath })
+    window.electronAPI.getImageData(newPath).then((data) => {
+      setImgSrcs((prev) => { const next = [...prev]; next[0] = data; return next })
+    })
+  }
+
+  const handleUploadSample = async (): Promise<void> => {
+    const newPath = await window.electronAPI.uploadImage(game.id, 'sample')
+    if (!newPath) return
+    const newSamples = [...(game.sampleImages ?? []), newPath]
+    onUpdate({ ...game, sampleImages: newSamples })
+    window.electronAPI.getImageData(newPath).then((data) => {
+      setImgSrcs((prev) => [...prev, data])
+    })
+  }
+
+  const handleDeleteImage = async (idx: number): Promise<void> => {
+    if (idx === 0) {
+      if (game.cover) await window.electronAPI.deleteFile(game.cover)
+      onUpdate({ ...game, cover: null })
+      setImgSrcs((prev) => { const next = [...prev]; next[0] = null; return next })
+      if (activeIdx === 0 && totalImages > 1) setActiveIdx(0)
+    } else {
+      const sampleIdx = idx - 1
+      const path = game.sampleImages?.[sampleIdx]
+      if (path) await window.electronAPI.deleteFile(path)
+      const newSamples = (game.sampleImages ?? []).filter((_, i) => i !== sampleIdx)
+      onUpdate({ ...game, sampleImages: newSamples })
+      setImgSrcs((prev) => prev.filter((_, i) => i !== idx))
+      if (activeIdx >= idx) setActiveIdx(Math.max(0, activeIdx - 1))
+    }
   }
 
   const addTag = (tag: string): void => {
@@ -144,29 +236,82 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
           ? <img src={activeImgSrc} alt={game.title} />
           : <div className="no-cover large">{game.id}</div>
         }
+        {activeIdx === 0 && !imgEditMode && (
+          <button
+            className="btn-upload-cover"
+            title="上傳封面圖"
+            onClick={(e) => { e.stopPropagation(); handleUploadCover() }}
+          >
+            ↑ 上傳封面
+          </button>
+        )}
+        {imgEditMode && activeIdx === 0 && (game.cover || activeImgSrc) && (
+          <button
+            className="btn-delete-img-cover"
+            title="刪除封面圖"
+            onClick={(e) => { e.stopPropagation(); handleDeleteImage(0) }}
+          >
+            × 刪除封面
+          </button>
+        )}
       </div>
 
       {/* Thumbnail strip */}
-      {totalImages > 1 && (
+      <div className="detail-thumbnails-wrap">
         <div className="detail-thumbnails">
           {Array.from({ length: totalImages }, (_, i) => (
-            <button
-              key={i}
-              className={`thumb-btn ${activeIdx === i ? 'active' : ''}`}
-              onClick={() => { setActiveIdx(i) }}
-            >
-              {imgSrcs[i]
-                ? <img src={imgSrcs[i]!} alt={`img ${i + 1}`} />
-                : <div className="thumb-placeholder" />
-              }
-            </button>
+            <div key={i} className="thumb-wrap">
+              <button
+                className={`thumb-btn ${activeIdx === i ? 'active' : ''}`}
+                onClick={() => { setActiveIdx(i) }}
+              >
+                {imgSrcs[i]
+                  ? <img src={imgSrcs[i]!} alt={`img ${i + 1}`} />
+                  : <div className="thumb-placeholder" />
+                }
+              </button>
+              {imgEditMode && (
+                <button className="thumb-delete-btn" onClick={() => handleDeleteImage(i)} title="刪除">×</button>
+              )}
+            </div>
           ))}
+          {!imgEditMode && (
+            <button className="thumb-btn thumb-upload" onClick={handleUploadSample} title="上傳樣本圖">+</button>
+          )}
         </div>
-      )}
+        <button
+          className={`thumb-edit-toggle ${imgEditMode ? 'active' : ''}`}
+          onClick={() => setImgEditMode((v) => !v)}
+          title={imgEditMode ? '完成' : '管理圖片'}
+        >
+          {imgEditMode ? '完成' : '✎'}
+        </button>
+      </div>
 
       <div className="detail-body">
         <div className="detail-id-row">
-          <span className="detail-id">{game.id}</span>
+          {editingId ? (
+            <input
+              className="detail-id-input"
+              value={idInput}
+              onChange={(e) => setIdInput(e.target.value.toUpperCase())}
+              onBlur={handleSaveId}
+              onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setIdInput(game.id); setEditingId(false) } }}
+              autoFocus
+            />
+          ) : (
+            <span className="detail-id editable" onClick={() => setEditingId(true)} title="點擊編輯代碼">{game.id}</span>
+          )}
+          {(/^[RVB]J\d{6,8}$/i.test(game.id) || game.id.startsWith('ST')) && (
+            <button
+              className="btn-refetch"
+              onClick={handleRefetchInfo}
+              disabled={refetching}
+              title="重新抓取遊戲資訊"
+            >
+              {refetching ? '⌛' : '↻'}
+            </button>
+          )}
           <button
             className={`btn-favorite ${game.isFavorite ? 'active' : ''}`}
             onClick={() => onUpdate({ ...game, isFavorite: !game.isFavorite })}
@@ -175,15 +320,39 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
             {game.isFavorite ? '♥' : '♡'}
           </button>
           {game.id.match(/^[RVB]J\d{6,8}$/i) && (
-            <button
-              className="btn-dlsite"
-              onClick={() => window.electronAPI.openExternal(getDLsiteUrl(game.id))}
-            >
-              DLsite ↗
-            </button>
+            <button className="btn-dlsite" onClick={() => window.electronAPI.openExternal(getDLsiteUrl(game.id))}>DLsite ↗</button>
+          )}
+          {game.id.startsWith('ST') && (
+            <button className="btn-dlsite" onClick={() => window.electronAPI.openExternal(`https://store.steampowered.com/app/${game.id.slice(2)}/`)}>Steam ↗</button>
           )}
         </div>
-        <div className="detail-title">{game.title || game.id}</div>
+        {refetching && refetchProgress && (
+          <div className="refetch-progress">
+            <div className="progress-step-msg">{refetchProgress.msg}</div>
+            <div className="progress-bar-bg"><div className="progress-bar-fill" style={{ width: `${refetchProgress.pct}%` }} /></div>
+          </div>
+        )}
+        {editingTitle ? (
+          <input
+            className="detail-title-input"
+            value={titleInput}
+            onChange={(e) => setTitleInput(e.target.value)}
+            onBlur={() => {
+              setEditingTitle(false)
+              const t = titleInput.trim()
+              if (t && t !== game.title) onUpdate({ ...game, title: t, note, rating, tags: editableTags })
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+              if (e.key === 'Escape') { setTitleInput(game.title); setEditingTitle(false) }
+            }}
+            autoFocus
+          />
+        ) : (
+          <div className="detail-title editable" onClick={() => setEditingTitle(true)} title="點擊編輯標題">
+            {game.title || game.id}
+          </div>
+        )}
         <div className="detail-circle">{game.circle}</div>
         {game.workType && <div className="detail-worktype">{game.workType}</div>}
 
@@ -304,6 +473,15 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
           <div className="stat-row">
             <span className="stat-label">上次遊玩</span>
             <span className="stat-value">{game.lastPlayedAt ?? '從未遊玩'}</span>
+          </div>
+          <div className="stat-row">
+            <span className="stat-label">磁碟大小</span>
+            <span className="stat-value stat-with-btn">
+              {game.folderSize != null ? formatFileSize(game.folderSize) : '未計算'}
+              {game.path && (
+                <button className="btn-stat-refresh" onClick={handleRefreshSize} title="重新計算大小">↻</button>
+              )}
+            </span>
           </div>
         </div>
       </div>

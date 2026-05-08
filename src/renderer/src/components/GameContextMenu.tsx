@@ -44,6 +44,7 @@ export default function GameContextMenu({
 
   const act = (fn: () => void): void => { fn(); onClose() }
   const isRJ = /^[RVB]J\d{6,8}$/i.test(game.id)
+  const isST = game.id.startsWith('ST')
 
   return (
     <div ref={ref} className="ctx-menu" style={{ top: safeY, left: safeX }}>
@@ -53,10 +54,15 @@ export default function GameContextMenu({
       {isRJ && (
         <button className="ctx-item" onClick={() => act(onOpenDLsite)}>🌐 DLsite 頁面</button>
       )}
+      {isST && (
+        <button className="ctx-item" onClick={() => act(() => window.electronAPI.openExternal(`https://store.steampowered.com/app/${game.id.slice(2)}/`))}>
+          🌐 Steam 頁面
+        </button>
+      )}
       {game.path && (
         <button className="ctx-item" onClick={() => act(onOpenFolder)}>📁 開啟遊戲資料夾</button>
       )}
-      {(game.exe || game.path || isRJ) && <div className="ctx-sep" />}
+      {(game.exe || game.path || isRJ || isST) && <div className="ctx-sep" />}
       {game.circle && (
         <button className="ctx-item" onClick={() => act(onSearchCircle)}>
           🔍 依照「{game.circle}」搜尋遊戲

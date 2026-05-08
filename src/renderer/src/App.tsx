@@ -2,13 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Game, GamesData, ViewMode } from './types'
 import { ALL_COLUMNS, DEFAULT_COLUMNS } from './types'
 import type { Settings } from './electron.d'
-import { localDateTime } from './utils'
+import { localDateTime, getGameSortValue } from './utils'
 import Sidebar from './components/Sidebar'
 import GameGrid from './components/GameGrid'
 import GameList from './components/GameList'
 import GameDetail from './components/GameDetail'
 import AddGameModal from './components/AddGameModal'
-import ScanModal from './components/ScanModal'
 import SettingsModal from './components/SettingsModal'
 import GameContextMenu, { getDLsiteUrl } from './components/GameContextMenu'
 import './App.css'
@@ -19,21 +18,21 @@ export default function App(): React.JSX.Element {
   const [data, setData] = useState<GamesData>({ games: [] })
   const [settings, setSettings] = useState<Settings>({ gamesDir: null })
   const [selected, setSelected] = useState<Game | null>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>(() =>
-    (localStorage.getItem('viewMode') as ViewMode) || 'grid'
-  )
+  const [viewMode, setViewMode] = useState<ViewMode>('grid')
+  const [initColWidths, setInitColWidths] = useState<Record<string, number>>({})
+  const [initSortKey, setInitSortKey] = useState<string | null>(null)
+  const [initSortDir, setInitSortDir] = useState<'asc' | 'desc' | null>(null)
 
   const handleSetViewMode = (mode: ViewMode): void => {
     setViewMode(mode)
-    localStorage.setItem('viewMode', mode)
+    window.electronAPI.saveUiSettings({ viewMode: mode })
   }
 
   const handleToggleColumn = (key: string): void => {
     setVisibleColumns((prev) => {
       const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
-      const ordered = ALL_COLUMNS.filter((c) => next.includes(c.key)).map((c) => c.key)
-      localStorage.setItem('listColumns', JSON.stringify(ordered))
-      return ordered
+      window.electronAPI.saveUiSettings({ listColumns: next })
+      return next
     })
   }
 
@@ -65,7 +64,7 @@ export default function App(): React.JSX.Element {
     const onUp = (): void => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
-      localStorage.setItem('detailWidth', String(detailWidthRef.current))
+      window.electronAPI.saveUiSettings({ detailWidth: detailWidthRef.current })
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -85,7 +84,7 @@ export default function App(): React.JSX.Element {
       const next = [...prev]
       const [removed] = next.splice(fromIdx, 1)
       next.splice(toIdx, 0, removed)
-      localStorage.setItem('listColumns', JSON.stringify(next))
+      window.electronAPI.saveUiSettings({ listColumns: next })
       return next
     })
   }
@@ -93,24 +92,59 @@ export default function App(): React.JSX.Element {
   const [filterTags, setFilterTags] = useState<string[]>([])
   const [filterRating, setFilterRating] = useState(0)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [filterSources, setFilterSources] = useState<('dlsite' | 'steam' | 'other')[]>(['dlsite', 'steam', 'other'])
+  const [ratingCollapsed, setRatingCollapsed] = useState(false)
+  const [sourceCollapsed, setSourceCollapsed] = useState(false)
+
+  const getGameSource = (id: string): 'dlsite' | 'steam' | 'other' => {
+    if (/^[RVB]J\d{6,8}$/i.test(id)) return 'dlsite'
+    if (/^ST\d+$/i.test(id)) return 'steam'
+    return 'other'
+  }
+
+  const handleSourceToggle = (source: 'dlsite' | 'steam' | 'other'): void => {
+    setFilterSources((prev) => {
+      const next = prev.includes(source) ? prev.filter((s) => s !== source) : [...prev, source]
+      window.electronAPI.saveUiSettings({ filterSources: next })
+      return next
+    })
+  }
+
+  const handleRatingChange = (r: number): void => {
+    setFilterRating(r)
+    window.electronAPI.saveUiSettings({ filterRating: r })
+  }
+
+  const handleFavoritesChange = (v: boolean): void => {
+    setFavoritesOnly(v)
+    window.electronAPI.saveUiSettings({ favoritesOnly: v })
+  }
+
+  const handleRatingCollapsedChange = (v: boolean): void => {
+    setRatingCollapsed(v)
+    window.electronAPI.saveUiSettings({ ratingCollapsed: v })
+  }
+
+  const handleSourceCollapsedChange = (v: boolean): void => {
+    setSourceCollapsed(v)
+    window.electronAPI.saveUiSettings({ sourceCollapsed: v })
+  }
 
   const handleTagToggle = (tag: string): void => {
     setFilterTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])
   }
   const handleFilterTagSingle = (tag: string): void => setFilterTags([tag])
   const [addInitialFile, setAddInitialFile] = useState<InitialFile | null>(null)
-  const [showScan, setShowScan] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [gridSortKey, setGridSortKey] = useState<string | null>(null)
+  const [gridSortDir, setGridSortDir] = useState<'asc' | 'desc'>('asc')
   const [ctxMenu, setCtxMenu] = useState<{ game: Game; x: number; y: number } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ game: Game; withFiles: boolean } | null>(null)
-  const [detailWidth, setDetailWidth] = useState(() => parseInt(localStorage.getItem('detailWidth') || '300'))
-  const detailWidthRef = useRef(detailWidth)
+  const [detailWidth, setDetailWidth] = useState(300)
+  const detailWidthRef = useRef(300)
   useEffect(() => { detailWidthRef.current = detailWidth }, [detailWidth])
   const [loading, setLoading] = useState(true)
-  const [visibleColumns, setVisibleColumns] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem('listColumns') ?? 'null') || DEFAULT_COLUMNS }
-    catch { return DEFAULT_COLUMNS }
-  })
+  const [visibleColumns, setVisibleColumns] = useState<string[]>(DEFAULT_COLUMNS)
 
   const dataRef = useRef<GamesData>({ games: [] })
   useEffect(() => { dataRef.current = data }, [data])
@@ -118,10 +152,24 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     Promise.all([
       window.electronAPI.loadGames(),
-      window.electronAPI.loadSettings()
-    ]).then(([gamesData, settingsData]) => {
+      window.electronAPI.loadSettings(),
+      window.electronAPI.loadUiSettings()
+    ]).then(([gamesData, settingsData, ui]) => {
       setData(gamesData)
       setSettings(settingsData)
+      if (ui.viewMode) setViewMode(ui.viewMode as ViewMode)
+      if (ui.listColumns) setVisibleColumns(ui.listColumns as string[])
+      if (ui.detailWidth) { setDetailWidth(ui.detailWidth as number); detailWidthRef.current = ui.detailWidth as number }
+      if (ui.listColWidths) setInitColWidths(ui.listColWidths as Record<string, number>)
+      if (ui.listSortKey) setInitSortKey(ui.listSortKey as string)
+      if (ui.listSortDir) setInitSortDir(ui.listSortDir as 'asc' | 'desc')
+      if (ui.filterRating !== undefined) setFilterRating(ui.filterRating as number)
+      if (ui.favoritesOnly !== undefined) setFavoritesOnly(ui.favoritesOnly as boolean)
+      if (ui.filterSources) setFilterSources(ui.filterSources as ('dlsite' | 'steam' | 'other')[])
+      if (ui.ratingCollapsed !== undefined) setRatingCollapsed(ui.ratingCollapsed as boolean)
+      if (ui.sourceCollapsed !== undefined) setSourceCollapsed(ui.sourceCollapsed as boolean)
+      if (ui.gridSortKey) setGridSortKey(ui.gridSortKey as string)
+      if (ui.gridSortDir) setGridSortDir(ui.gridSortDir as 'asc' | 'desc')
       setLoading(false)
     })
   }, [])
@@ -187,6 +235,7 @@ export default function App(): React.JSX.Element {
 
   const filtered = data.games.filter((g) => {
     if (favoritesOnly && !g.isFavorite) return false
+    if (!filterSources.includes(getGameSource(g.id))) return false
     const q = search.toLowerCase()
     const matchSearch =
       !q ||
@@ -199,6 +248,31 @@ export default function App(): React.JSX.Element {
     return matchSearch && matchTag && matchRating
   })
 
+  const handleGridSortChange = (key: string | null): void => {
+    setGridSortKey(key)
+    window.electronAPI.saveUiSettings({ gridSortKey: key })
+  }
+
+  const handleGridSortDirToggle = (): void => {
+    const next = gridSortDir === 'asc' ? 'desc' : 'asc'
+    setGridSortDir(next)
+    window.electronAPI.saveUiSettings({ gridSortDir: next })
+  }
+
+  const sortedFiltered = gridSortKey && viewMode === 'grid'
+    ? [...filtered].sort((a, b) => {
+        const va = getGameSortValue(a, gridSortKey)
+        const vb = getGameSortValue(b, gridSortKey)
+        if (va == null && vb == null) return 0
+        if (va == null) return 1
+        if (vb == null) return -1
+        const result = typeof va === 'number' && typeof vb === 'number'
+          ? va - vb
+          : String(va).localeCompare(String(vb), 'ja')
+        return gridSortDir === 'asc' ? result : -result
+      })
+    : filtered
+
   const allTags = Array.from(new Set(data.games.flatMap((g) => g.tags))).sort()
 
   if (loading) {
@@ -208,15 +282,10 @@ export default function App(): React.JSX.Element {
   return (
     <div className="app">
       <div className="titlebar">
-        <span className="titlebar-title">DLsite Manager</span>
+        <span className="titlebar-title">Game Manager</span>
         <div className="titlebar-actions">
-          <button onClick={() => setShowScan(true)}>批量掃描</button>
-          <button className="primary" onClick={handleOpenAdd}>
-            + 新增遊戲
-          </button>
-          <button className="icon-btn" onClick={() => setShowSettings(true)} title="設定">
-            ⚙
-          </button>
+          <button className="primary" onClick={handleOpenAdd}>+ 新增遊戲</button>
+          <button className="icon-btn" onClick={() => setShowSettings(true)} title="設定">⚙</button>
         </div>
       </div>
 
@@ -225,11 +294,17 @@ export default function App(): React.JSX.Element {
           tags={allTags}
           selectedTags={filterTags}
           filterRating={filterRating}
+          filterSources={filterSources}
           favoritesOnly={favoritesOnly}
+          ratingCollapsed={ratingCollapsed}
+          sourceCollapsed={sourceCollapsed}
           onTagToggle={handleTagToggle}
           onClearTags={() => setFilterTags([])}
-          onRatingChange={setFilterRating}
-          onFavoritesChange={setFavoritesOnly}
+          onRatingChange={handleRatingChange}
+          onSourceToggle={handleSourceToggle}
+          onFavoritesChange={handleFavoritesChange}
+          onRatingCollapsedChange={handleRatingCollapsedChange}
+          onSourceCollapsedChange={handleSourceCollapsedChange}
           gameCount={filtered.length}
         />
 
@@ -246,25 +321,34 @@ export default function App(): React.JSX.Element {
                 <button className="search-clear" onClick={() => setSearch('')} title="清除搜尋">✕</button>
               )}
             </div>
+            {viewMode === 'grid' && (
+              <div className="grid-sort-wrap">
+                <select
+                  className="grid-sort-select"
+                  value={gridSortKey ?? ''}
+                  onChange={(e) => handleGridSortChange(e.target.value || null)}
+                >
+                  <option value="">排序：預設</option>
+                  {ALL_COLUMNS.map((col) => (
+                    <option key={col.key} value={col.key}>{col.label}</option>
+                  ))}
+                </select>
+                {gridSortKey && (
+                  <button className="grid-sort-dir" onClick={handleGridSortDirToggle}>
+                    {gridSortDir === 'asc' ? '▲' : '▼'}
+                  </button>
+                )}
+              </div>
+            )}
             <div className="view-toggle">
-              <button
-                className={viewMode === 'grid' ? 'active' : ''}
-                onClick={() => handleSetViewMode('grid')}
-              >
-                ⊞ 磁磚
-              </button>
-              <button
-                className={viewMode === 'list' ? 'active' : ''}
-                onClick={() => handleSetViewMode('list')}
-              >
-                ≡ 列表
-              </button>
+              <button className={viewMode === 'grid' ? 'active' : ''} onClick={() => handleSetViewMode('grid')}>⊞ 磁磚</button>
+              <button className={viewMode === 'list' ? 'active' : ''} onClick={() => handleSetViewMode('list')}>≡ 列表</button>
             </div>
           </div>
 
           {viewMode === 'grid' ? (
             <GameGrid
-              games={filtered}
+              games={sortedFiltered}
               selected={selected}
               onSelect={setSelected}
               onContextMenu={handleContextMenu}
@@ -279,6 +363,9 @@ export default function App(): React.JSX.Element {
               onMoveColumn={handleMoveColumn}
               onLaunch={launchGame}
               onContextMenu={handleContextMenu}
+              initialColWidths={initColWidths}
+              initialSortKey={initSortKey}
+              initialSortDir={initSortDir}
             />
           )}
         </div>
@@ -306,14 +393,6 @@ export default function App(): React.JSX.Element {
           existingIds={data.games.map((g) => g.id)}
           gamesDir={settings.gamesDir}
           onOpenSettings={() => { handleCloseAdd(); setShowSettings(true) }}
-        />
-      )}
-
-      {showScan && (
-        <ScanModal
-          onAdd={addGame}
-          onClose={() => setShowScan(false)}
-          existingIds={data.games.map((g) => g.id)}
         />
       )}
 

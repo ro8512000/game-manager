@@ -1,31 +1,50 @@
 import { useState, useMemo } from 'react'
 
+type GameSource = 'dlsite' | 'steam' | 'other'
+
+const SOURCE_LABELS: Record<GameSource, string> = {
+  dlsite: 'DLsite 遊戲',
+  steam: 'Steam 遊戲',
+  other: '其他遊戲'
+}
+
 interface Props {
   tags: string[]
   selectedTags: string[]
   filterRating: number
+  filterSources: GameSource[]
   favoritesOnly: boolean
+  ratingCollapsed: boolean
+  sourceCollapsed: boolean
   gameCount: number
   onTagToggle: (tag: string) => void
   onClearTags: () => void
   onRatingChange: (r: number) => void
+  onSourceToggle: (source: GameSource) => void
   onFavoritesChange: (v: boolean) => void
+  onRatingCollapsedChange: (v: boolean) => void
+  onSourceCollapsedChange: (v: boolean) => void
 }
 
 export default function Sidebar({
   tags,
   selectedTags,
   filterRating,
+  filterSources,
   favoritesOnly,
+  ratingCollapsed,
+  sourceCollapsed,
   gameCount,
   onTagToggle,
   onClearTags,
   onRatingChange,
-  onFavoritesChange
+  onSourceToggle,
+  onFavoritesChange,
+  onRatingCollapsedChange,
+  onSourceCollapsedChange
 }: Props): React.JSX.Element {
   const [tagSearch, setTagSearch] = useState('')
 
-  // Selected tags first, then alphabetical; filtered by tagSearch
   const sortedTags = useMemo(() => {
     const selected = selectedTags.filter((t) => tags.includes(t))
     const unselected = tags.filter((t) => !selectedTags.includes(t))
@@ -34,6 +53,8 @@ export default function Sidebar({
       ? all.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
       : all
   }, [tags, selectedTags, tagSearch])
+
+  const allSources: GameSource[] = ['dlsite', 'steam', 'other']
 
   return (
     <aside className="sidebar">
@@ -52,16 +73,45 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-section">
-        <div className="sidebar-label">評分篩選</div>
-        {[0, 1, 2, 3, 4, 5].map((r) => (
+        <button
+          className="sidebar-collapsible-hdr"
+          onClick={() => onSourceCollapsedChange(!sourceCollapsed)}
+        >
+          <span className="sidebar-label">來源</span>
+          <span className="collapse-arrow">{sourceCollapsed ? '▸' : '▾'}</span>
+        </button>
+        {!sourceCollapsed && allSources.map((src) => (
           <button
-            key={r}
-            className={`filter-btn ${filterRating === r ? 'active' : ''}`}
-            onClick={() => onRatingChange(r)}
+            key={src}
+            className={`filter-btn source-btn ${filterSources.includes(src) ? 'active' : ''}`}
+            onClick={() => onSourceToggle(src)}
           >
-            {r === 0 ? '全部' : '★'.repeat(r) + '☆'.repeat(5 - r) + ' 以上'}
+            {filterSources.includes(src) ? '✓ ' : ''}{SOURCE_LABELS[src]}
           </button>
         ))}
+      </div>
+
+      <div className="sidebar-section">
+        <button
+          className="sidebar-collapsible-hdr"
+          onClick={() => onRatingCollapsedChange(!ratingCollapsed)}
+        >
+          <span className="sidebar-label">評分篩選</span>
+          <span className="collapse-arrow">{ratingCollapsed ? '▸' : '▾'}</span>
+        </button>
+        {!ratingCollapsed && (
+          <>
+            {[0, 1, 2, 3, 4, 5].map((r) => (
+              <button
+                key={r}
+                className={`filter-btn ${filterRating === r ? 'active' : ''}`}
+                onClick={() => onRatingChange(r)}
+              >
+                {r === 0 ? '全部' : '★'.repeat(r) + '☆'.repeat(5 - r) + ' 以上'}
+              </button>
+            ))}
+          </>
+        )}
       </div>
 
       <div className="sidebar-section sidebar-tags-section">

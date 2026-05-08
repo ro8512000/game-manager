@@ -20,6 +20,7 @@ export interface Game {
   playCount: number
   playTime: number
   isFavorite: boolean
+  folderSize: number | null
 }
 
 export type ViewMode = 'grid' | 'list'
@@ -47,6 +48,7 @@ export const ALL_COLUMNS: ColumnDef[] = [
   { key: 'lastPlayedAt', label: '上次遊玩',    width: '130px' },
   { key: 'playCount',    label: '遊玩次數',    width: '70px'  },
   { key: 'playTime',     label: '遊玩時間',    width: '100px' },
+  { key: 'folderSize',  label: '大小',        width: '80px'  },
 ]
 
 export const DEFAULT_COLUMNS = ['id', 'title', 'circle', 'tags', 'rating']

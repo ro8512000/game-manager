@@ -42,6 +42,7 @@ interface ElectronAPI {
   loadGames: () => Promise<GamesData>
   saveGames: (data: GamesData) => Promise<boolean>
   fetchInfo: (code: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
+  fetchSteamInfo: (appId: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
   extractCode: (str: string) => Promise<string | null>
   launchGame: (args: { exePath: string; gameId: string }) => Promise<boolean>
   openFolder: (folderPath: string) => Promise<boolean>
@@ -50,9 +51,14 @@ interface ElectronAPI {
   selectExeFrom: (startPath: string) => Promise<string | null>
   scanFolder: (folderPath: string) => Promise<{ success: boolean; data?: unknown[]; error?: string }>
   getImageData: (imgPath: string) => Promise<string | null>
+  uploadImage: (gameId: string, role: 'cover' | 'sample') => Promise<string | null>
   findExe: (folderPath: string) => Promise<string | null>
   openExternal: (url: string) => Promise<void>
   deleteFolder: (folderPath: string) => Promise<boolean>
+  deleteFile: (filePath: string) => Promise<boolean>
+  getFolderSize: (folderPath: string) => Promise<number | null>
+  loadUiSettings: () => Promise<Record<string, unknown>>
+  saveUiSettings: (patch: Record<string, unknown>) => Promise<boolean>
   onProgress: (callback: (data: { msg: string; pct: number }) => void) => () => void
   onGameSessionEnd: (callback: (data: { gameId: string; elapsed: number }) => void) => () => void
 

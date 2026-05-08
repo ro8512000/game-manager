@@ -1,8 +1,8 @@
-# DLsite Manager v2 — 專案說明文件
+# Game Manager — 專案說明文件
 
 ## 概覽
 
-Windows 桌面應用程式，功能類似 Steam，用來管理 DLsite 遊戲庫。  
+Windows 桌面應用程式，功能類似 Steam，用來管理 DLsite / Steam 遊戲庫。  
 技術棧：**Electron 39 + electron-vite + React 19 + TypeScript**
 
 ---
@@ -10,7 +10,7 @@ Windows 桌面應用程式，功能類似 Steam，用來管理 DLsite 遊戲庫�
 ## 目錄結構
 
 ```
-dlsite-manager-v2/
+game-manager/
 ├── src/
 │   ├── main/index.ts          ← Electron 主程式（IPC handlers、爬蟲、檔案操作）
 │   ├── preload/index.ts       ← contextBridge 暴露 API
@@ -19,28 +19,31 @@ dlsite-manager-v2/
 │       ├── App.css            ← 全域深色主題樣式
 │       ├── types.ts           ← 型別定義（Game、ColumnDef、ALL_COLUMNS 等）
 │       ├── electron.d.ts      ← window.electronAPI 型別宣告
-│       ├── utils.ts           ← localDateTime / formatPlayTime / generateUUID
+│       ├── utils.ts           ← 工具函式（localDateTime / formatPlayTime / formatFileSize / getGameSortValue）
 │       └── components/
-│           ├── Sidebar.tsx        ← 左側篩選欄（我的最愛、評分、標籤多選）
+│           ├── Sidebar.tsx        ← 左側篩選欄
 │           ├── GameGrid.tsx       ← 磁磚瀏覽容器
-│           ├── GameCard.tsx       ← 磁磚卡片
+│           ├── GameCard.tsx       ← 磁磚卡片（16:9 比例）
 │           ├── GameList.tsx       ← 列表瀏覽（可排序、可調欄寬、hover 預覽）
 │           ├── GameDetail.tsx     ← 右側詳情面板（可拉寬）
 │           ├── ImageLightbox.tsx  ← 圖片燈箱（鍵盤/滾輪切換）
 │           ├── GameContextMenu.tsx← 右鍵選單
 │           ├── AddGameModal.tsx   ← 新增遊戲（自動偵測代碼、進度條）
-│           ├── ScanModal.tsx      ← 批量掃描資料夾
 │           └── SettingsModal.tsx  ← 設定（遊戲儲存目錄）
 ├── data/
 │   ├── games.json             ← 遊戲資料庫
-│   └── settings.json          ← 使用者設定
+│   ├── settings.json          ← 使用者設定（gamesDir）
+│   └── ui-settings.json       ← UI 狀態持久化（視圖、欄位、視窗大小等）
 ├── game-images/               ← 封面圖快取（每款遊戲獨立子資料夾）
 │   └── {code}/
 │       ├── main.jpg           ← 主封面
 │       ├── smp1.webp          ← 樣本圖 1
 │       └── smp2.webp ...
+├── logs/                      ← 錯誤日誌（自動清除 3 天前的）
 └── PROJECT.md                 ← 本文件
 ```
+
+> `.gitignore` 已排除：`game-images/`、`data/`、`logs/`
 
 ---
 
@@ -48,42 +51,70 @@ dlsite-manager-v2/
 
 ```typescript
 interface Game {
-  uuid: string          // 唯一識別碼（自動生成，永不重複，作為真正的主鍵）
-  id: string            // 遊戲代碼（RJ/VJ/BJ），純屬性，可重複
+  uuid: string              // 唯一識別碼（真正的主鍵，自動生成）
+  id: string                // 遊戲代碼：RJ/VJ/BJ（DLsite）、ST{appId}（Steam）、NF001...（無代碼）
   title: string
-  circle: string        // 社團名
+  circle: string            // 社團名 / 開發商
   tags: string[]
-  cover: string | null  // 本地封面圖路徑（game-images/{code}/main.jpg）
-  coverUrl: string | null  // 遠端封面 URL
-  sampleImages: string[]   // 樣本圖本地路徑陣列
-  path: string | null   // 遊戲資料夾路徑
-  exe: string | null    // 啟動 exe 路徑
-  rating: number        // 個人評分 0-5
+  cover: string | null      // 本地封面圖相對路徑（game-images/{code}/main.jpg）
+  coverUrl: string | null   // 遠端封面 URL（備用）
+  sampleImages: string[]    // 樣本圖本地相對路徑陣列
+  path: string | null       // 遊戲資料夾路徑
+  exe: string | null        // 啟動 exe 路徑
+  rating: number            // 個人評分 0-5
   note: string
-  addedAt: string       // 加入時間（YYYY-MM-DD HH:MM:SS）
+  addedAt: string           // 加入時間（YYYY-MM-DD HH:MM:SS）
   language: string
-  releaseDate: string | null   // DLsite 發售日
-  workType: string | null      // 作品形式（シミュレーション 等）
+  releaseDate: string | null   // 發售日
+  workType: string | null      // 作品形式
   dlsiteRating: string | null  // DLsite 社群評分
   lastPlayedAt: string | null  // 上次遊玩時間
   playCount: number            // 遊玩次數
   playTime: number             // 累積遊玩時間（秒）
-  isFavorite: boolean          // 我的最愛
+  isFavorite: boolean
+  folderSize: number | null    // 遊戲資料夾大小（bytes），加入時自動計算
 }
 ```
 
-> **重要**：所有身份比對（updateGame、deleteGame、React key、selected 狀態）一律使用 `uuid`，不使用 `id`（遊戲代碼）。
+> **重要**：所有身份比對一律使用 `uuid`，`id` 只是屬性。  
+> 圖片路徑存相對路徑（如 `RJ01234/main.jpg`），載入時動態展開為絕對路徑，搬移專案目錄不影響圖片。
 
 ---
 
-## 設定（settings.json）
+## 遊戲代碼規則
 
+| 前綴 | 來源 | 範例 |
+|------|------|------|
+| `RJ` / `VJ` / `BJ` | DLsite | RJ01234567 |
+| `ST{appId}` | Steam | ST2074890 |
+| `NF001`, `NF002`... | 無代碼（自動指派） | NF001 |
+
+---
+
+## 設定檔
+
+### settings.json
 ```json
-{ "gamesDir": "D:/Games" }
+{ "gamesDir": "G:/Games" }
 ```
-
 - `gamesDir`：新增遊戲時，遊戲資料夾移動/解壓縮的目標目錄
-- 透過 ⚙ 設定按鈕修改
+
+### ui-settings.json
+所有 UI 狀態存此檔（不用 localStorage，避免 dev server port 變動造成重置）：
+
+| key | 說明 |
+|-----|------|
+| `viewMode` | `'grid'` 或 `'list'` |
+| `listColumns` | 可見欄位 key 陣列（有序） |
+| `listColWidths` | 欄寬 `{key: px}` |
+| `listSortKey` / `listSortDir` | 列表排序欄位 / 方向 |
+| `gridSortKey` / `gridSortDir` | 磁磚排序欄位 / 方向 |
+| `detailWidth` | 右側面板寬度（px） |
+| `windowWidth` / `windowHeight` | 視窗大小 |
+| `filterRating` | 評分篩選值 |
+| `favoritesOnly` | 我的最愛篩選 |
+| `filterSources` | 來源篩選 `['dlsite','steam','other']` |
+| `ratingCollapsed` / `sourceCollapsed` | 側欄區塊收合狀態 |
 
 ---
 
@@ -94,23 +125,29 @@ interface Game {
 |------|------|
 | `settings:load` | 讀取 settings.json |
 | `settings:save` | 儲存 settings.json |
+| `ui:load` | 讀取 ui-settings.json |
+| `ui:save(patch)` | 合併更新 ui-settings.json |
 
 ### 遊戲資料
 | 通道 | 說明 |
 |------|------|
-| `games:load` | 讀取 games.json（自動補舊版缺少的欄位） |
-| `games:save` | 儲存 games.json |
-| `games:fetchInfo(code)` | 從 DLsite 抓取資訊（標題/社團/tag/評分/發售日/圖片） |
+| `games:load` | 讀取 games.json（自動補缺少欄位、展開圖片相對路徑） |
+| `games:save` | 儲存 games.json（壓縮圖片路徑為相對路徑） |
+| `games:fetchInfo(code)` | DLsite 抓取（日文）：標題/社團/tag/評分/發售日/圖片 |
+| `games:fetchSteamInfo(appId)` | Steam API 抓取：標題/開發商/tag/發售日/截圖 |
 | `games:extractCode(str)` | 從字串擷取 RJ/VJ/BJ 代碼 |
 
 ### 遊戲操作
 | 通道 | 說明 |
 |------|------|
-| `games:launch({exePath, gameId})` | spawn 啟動 exe（detached，計時） |
+| `games:launch({exePath, gameId})` | spawn 啟動 exe（detached，計時，記錄錯誤） |
 | `games:openFolder(path)` | shell.openPath 開啟資料夾 |
 | `games:findExe(folderPath)` | 在資料夾內搜尋 exe（深度≤4，跳過 setup/install） |
 | `games:getImageData(imgPath)` | 讀本地圖片返回 base64 data URL |
-| `games:deleteFolder(path)` | fs.rm 刪除資料夾 |
+| `games:deleteFolder(path)` | 刪除資料夾 |
+| `games:deleteFile(path)` | 刪除單一檔案（刪除圖片用） |
+| `games:getFolderSize(path)` | 遞迴計算資料夾大小（bytes） |
+| `games:uploadImage({gameId, role})` | 開啟對話框上傳圖片至 game-images/{gameId}/ |
 
 ### 檔案選擇
 | 通道 | 說明 |
@@ -123,43 +160,58 @@ interface Game {
 ### 檔案處理
 | 通道 | 說明 |
 |------|------|
-| `games:previewMove({exePath, gamesDir})` | 預覽 exe 移動操作（找到含代碼的祖先資料夾） |
-| `games:moveToLibrary({exePath, gamesDir})` | 實際移動遊戲資料夾到 gamesDir |
+| `games:previewMove({exePath, gamesDir})` | 預覽移動操作（無代碼時用父目錄） |
+| `games:moveToLibrary({exePath, gamesDir})` | 移動遊戲資料夾到 gamesDir（跨磁碟用 copyFileSync） |
 | `games:previewExtract({archivePath, gamesDir})` | 預覽解壓縮目標位置 |
-| `games:extractArchive({archivePath, gamesDir})` | 解壓縮到 `{gamesDir}/{壓縮檔名}/` |
-| `games:scanFolder(folderPath)` | 掃描資料夾，找出含 RJ 代碼的子資料夾 |
+| `games:extractArchive({archivePath, gamesDir})` | 解壓縮（-mcp=932 處理日文 Shift-JIS 檔名） |
 
-### 其他
+### 事件（主程式 → renderer）
 | 通道 | 說明 |
 |------|------|
 | `shell:openExternal(url)` | 在系統瀏覽器開啟 URL |
-| `game:session-end` | 主程式→renderer：遊戲關閉事件（含遊玩秒數） |
-| `progress:step` | 主程式→renderer：進度更新 `{msg, pct}` |
+| `game:session-end` | 遊戲關閉事件（含遊玩秒數） |
+| `progress:step` | 進度更新 `{msg, pct}` |
 
 ---
 
 ## 主要功能
 
-### 新增遊戲流程
-1. 點「+ 新增遊戲」→ **直接開啟檔案對話框**（exe 或壓縮檔）
+### 新增遊戲流程（exe）
+1. 點「+ 新增遊戲」→ 開啟檔案對話框（exe 或壓縮檔）
 2. 自動從路徑偵測 RJ/VJ/BJ 代碼
-3. 若找到代碼 → 自動抓 DLsite 資訊（標題/社團/tag/評分/發售日/所有圖片）
-4. 顯示進度條（百分比）
-5. 若有設定 `gamesDir`：自動移動/解壓縮到目標目錄
+3. 若**沒有代碼**：顯示手動輸入欄（DLsite 代碼 / Steam App ID），可套用後自動抓取資訊
+4. 若**仍無代碼**：自動指派 `NF001`、`NF002`... 遞增
+5. 遊戲**標題**：有資訊取官方標題，否則取 exe 的上層資料夾名稱
+6. 若有設定 `gamesDir`：
+   - exe：移動整個資料夾到 gamesDir（可勾選「不搬移」保留原始路徑）
+   - 壓縮檔：解壓縮到 `{gamesDir}/{壓縮檔名}/`
+7. 加入完成後自動計算資料夾大小
 
-**解壓縮邏輯**：目標資料夾名稱 = 壓縮檔名（不含副檔名），內容解壓至其中。
+**Exe 移動邏輯**：往上找含 RJ 代碼的祖先資料夾；找不到則用 exe 的直接上層資料夾。跨磁碟用 `copyFileSync` 逐檔複製（避免 `cpSync` 中文路徑亂碼）。
 
-**Exe 移動邏輯**：往上找含 RJ 代碼的祖先資料夾，整個移動，跨磁碟自動改用 copy+delete。
+**解壓縮編碼**：使用 `7za -mcp=932`，正確處理日文 Shift-JIS 編碼的 ZIP 檔名。
 
 ### DLsite 爬蟲
 - 網址：RJ→`/maniax/`、VJ→`/home/`、BJ→`/boys-love/`
-- Cookie：`locale=zh_TW`（繁體中文）
-- 抓取：og:title、og:image、`.maker_name`、`ジャンル` table row、`作品形式` table row、DLsite 評分
+- Cookie：`locale=ja_JP`（日文原文）
+- 抓取：og:title（去掉社團名和 DLsite 後綴）、og:image、`.maker_name`、`ジャンル` tags、`作品形式`、DLsite 評分、`販売日`
 - 圖片存到 `game-images/{code}/`（main + smp1/smp2...）
 
+### Steam 爬蟲
+- API：`https://store.steampowered.com/api/appdetails?appids={appId}&l=tchinese`
+- 抓取：名稱、開發商、genres、header_image、screenshots（最多 6 張）、發售日
+- 圖片存到 `game-images/ST{appId}/`
+- 遊戲代碼格式：`ST{appId}`
+
 ### 遊玩時間計算
-- `spawn` 啟動遊戲（detached，保留 close 事件監聽）
-- 遊戲關閉時發送 `game:session-end`，renderer 累加 `playTime`
+- `spawn` 啟動遊戲（detached，保留 close 事件）
+- 關閉時發送 `game:session-end`，renderer 累加 `playTime`
+- 啟動/關閉錯誤記錄到 logs/
+
+### 錯誤日誌
+- 位置：`{appRoot}/logs/YYYY-MM-DD.log`（每天一檔）
+- 自動清除 3 天前的舊 log
+- 記錄：games:launch 錯誤、非 0 exit code、games:deleteFile 錯誤等
 
 ---
 
@@ -168,55 +220,77 @@ interface Game {
 ### Sidebar（左側）
 - 遊戲數量顯示
 - 我的最愛篩選
-- 評分篩選（0-5 星以上）
-- 標籤多選（AND 邏輯）+ 關鍵字過濾 + 已選置頂 + 捲軸
+- **來源篩選**（可收合）：DLsite 遊戲 / Steam 遊戲 / 其他遊戲
+- **評分篩選**（可收合）：0-5 星以上
+- 標籤多選（AND 邏輯）+ 關鍵字過濾 + 已選置頂
+- 所有篩選狀態和收合狀態持久化
+
+### GameGrid（磁磚視圖）
+- 16:9 比例卡片
+- Toolbar 有排序選單（與列表欄位相同）+ ASC/DESC 切換
+- 排序設定持久化
 
 ### GameList（列表視圖）
-- 動態欄位（右鍵標題列選擇顯示欄位）
-- 欄位可拖拉調整寬度（儲存到 localStorage）
-- 欄位可拖拉換順序
-- 點擊欄位標題排序（無→▲→▼→無，儲存到 localStorage）
+- 動態欄位（右鍵標題列選擇，含「大小」欄位）
+- 欄位可拖拉調整寬度、拖拉換順序
+- 點擊欄位標題排序（無→▲→▼→無）
 - 整體表格橫向捲動
-- 滑鼠停留 300ms 顯示封面圖預覽（優先讀本地圖片）
+- 滑鼠停留 300ms 顯示封面圖預覽
 - 雙擊啟動遊戲
+- 所有欄位/排序/寬度設定持久化
 
 ### GameDetail（右側面板）
-- 可拖拉左邊緣調整寬度（220~600px，儲存到 localStorage）
+- 可拖拉左邊緣調整寬度（220~600px），持久化
+- **代碼可編輯**（點擊）
+- **標題可編輯**（點擊）
+- **↻ 重新抓取資訊**（DLsite/Steam 遊戲），顯示進度條
+- 圖片管理：✎ 進入編輯模式 → 縮圖顯示 × 可刪除；封面 hover 顯示上傳按鈕；縮圖列有 + 上傳樣本圖
 - 圖片點擊開啟燈箱（鍵盤/滾輪切換、Esc 關閉）
-- 縮圖列（sampleImages）
 - Tag 編輯模式（點 ✎ → 顯示 × 移除鈕 + 新增輸入框 + 自動補全）
 - 我的最愛切換（♡/♥）
-- ⚙ 啟動檔案設定（從當前 exe 目錄開啟選擇對話框）
-- 儲存時包含 note、rating、tags
-- 統計：發售日、DLsite 評分、加入時間、遊玩次數、遊玩時間、上次遊玩
+- DLsite ↗ / Steam ↗ 連結按鈕
+- ⚙ 啟動檔案設定
+- 備注編輯 + 儲存
+- 統計：發售日、DLsite 評分、加入時間、遊玩次數、遊玩時間、上次遊玩、**磁碟大小**（含 ↻ 重新計算）
 
 ### 右鍵選單（GameContextMenu）
-- 開啟遊戲 / DLsite 頁面 / 開啟資料夾
+- 開啟遊戲 / DLsite 頁面 / Steam 頁面 / 開啟遊戲資料夾
 - 依社團搜尋 / 依代碼搜尋
 - 從列表移除 / 移除並刪除檔案
 
+### AddGameModal（新增遊戲）
+- 自動偵測代碼，顯示 DLsite/Steam 資訊預覽
+- 無代碼時：顯示 DLsite 代碼 / Steam App ID 手動輸入欄
+- exe 加入時：「不搬移資料夾」選項（勾選後直接記錄原始路徑）
+- 顯示移動/解壓縮預覽路徑
+- 進度條
+
 ---
 
-## 視圖模式 & 持久化設定
+## 視窗行為
 
-所有存入 `localStorage`：
-
-| key | 說明 |
-|-----|------|
-| `viewMode` | `'grid'` 或 `'list'` |
-| `listColumns` | 可見欄位的 key 陣列（有序） |
-| `listColWidths` | 欄寬 `{key: px}` |
-| `listSortKey` | 目前排序欄位 |
-| `listSortDir` | `'asc'` / `'desc'` |
-| `detailWidth` | 右側面板寬度（px） |
+- 啟動時讀取上次視窗大小（`ui-settings.json`）
+- 視窗大小改變後 500ms 自動存檔
+- 最小寬度 800px、最小高度 600px
 
 ---
 
 ## 已知注意事項
 
-1. **uuid 是真正的主鍵**，`id`（遊戲代碼）只是屬性，可重複。舊版 JSON 無 uuid 欄位，載入時自動生成。
-2. **圖片目錄**：`{appRoot}/game-images/{code}/`（dev: 專案根目錄；prod: userData）
-3. **DLsite 爬蟲依賴 HTML 結構**，若 DLsite 改版需更新 main/index.ts 的 regex
-4. **作品形式**：從 `work_outline` table 找 `作品形式` 那列，用 `</tr>` 分割後掃描
-5. **7zip-bin**：已作為 electron-builder 依賴存在，無需另外安裝
-6. **遊玩時間計時**：若 Electron 在遊戲關閉前被強制退出，該次時間不會記錄
+1. **uuid 是真正的主鍵**，`id` 只是屬性，可重複。舊 JSON 無 uuid 欄位，載入時自動生成。
+2. **圖片路徑**存相對路徑，搬移或改名專案目錄後圖片仍可正常顯示。
+3. **DLsite 爬蟲依賴 HTML 結構**，若 DLsite 改版需更新 main/index.ts 的 regex。
+4. **跨磁碟移動**用 `copyFileSync` 逐檔複製（非 `cpSync`），避免中文路徑亂碼。
+5. **ZIP 解壓縮**加 `-mcp=932`，處理日文 Shift-JIS 編碼的傳統 ZIP 檔名。
+6. **遊玩時間**：若 Electron 在遊戲關閉前強制退出，該次時間不會記錄。
+7. **啟動 workaround**：main/index.ts 最頂端的 `process.stdout.write('')` 提供 event loop tick，避免特定環境的 Chromium GPU 初始化 race condition 崩潰，請勿移除。
+
+---
+
+## 指令
+
+```bash
+npm run dev          # 開發模式（Electron 視窗）
+npm run typecheck    # TypeScript 型別檢查
+npm run build:win    # 建置 Windows 安裝檔
+```

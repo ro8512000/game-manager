@@ -3,6 +3,15 @@ import { localDateTime, generateUUID } from '../utils'
 import type { Game } from '../types'
 import type { PreviewMoveResult, PreviewExtractResult } from '../electron.d'
 
+function nextNFCode(existingIds: string[]): string {
+  const nums = existingIds
+    .filter((id) => /^NF\d+$/i.test(id))
+    .map((id) => parseInt(id.slice(2), 10))
+    .filter((n) => !isNaN(n))
+  const max = nums.length > 0 ? Math.max(...nums) : 0
+  return `NF${String(max + 1).padStart(3, '0')}`
+}
+
 interface FileState {
   path: string
   type: 'exe' | 'archive'
@@ -36,6 +45,11 @@ export default function AddGameModal({
   const [error, setError] = useState('')
   const [progress, setProgress] = useState<{ msg: string; pct: number } | null>(null)
   const initialized = useRef(false)
+  const noAutoCode = !initialFile.code
+  const [manualDlsite, setManualDlsite] = useState('')
+  const [manualSteam, setManualSteam] = useState('')
+  const [applyingCode, setApplyingCode] = useState(false)
+  const [skipMove, setSkipMove] = useState(false)
 
   useEffect(() => {
     return window.electronAPI.onProgress((data) => setProgress(data))
@@ -103,11 +117,11 @@ export default function AddGameModal({
     setProgress(null)
 
     const code = file.code
-    const id = code || `LOCAL_${Date.now()}`
+    const id = code || nextNFCode(existingIds)
     let gamePath: string | null = null
     let exePath: string | null = null
 
-    if (gamesDir) {
+    if (gamesDir && !(file.type === 'exe' && skipMove)) {
       if (file.type === 'exe') {
         const result = await window.electronAPI.moveToLibrary({ exePath: file.path, gamesDir })
         if (!result.success) {
@@ -134,11 +148,21 @@ export default function AddGameModal({
       gamePath = file.path.substring(0, file.path.lastIndexOf(sep)) || null
     }
 
+    // Calculate folder size immediately after add
+    const folderSize = gamePath ? await window.electronAPI.getFolderSize(gamePath) : null
+
     const info = file.info
+
+    // Derive a readable title from the file path when no info was fetched
+    const parts = file.path.replace(/\\/g, '/').split('/')
+    const pathTitle = file.type === 'exe'
+      ? (parts[parts.length - 2] || parts[parts.length - 1])
+      : (parts[parts.length - 1].replace(/\.[^/.]+$/, '') || parts[parts.length - 1])
+
     const game: Game = {
       uuid: generateUUID(),
       id,
-      title: (info?.title as string) || id,
+      title: (info?.title as string) || pathTitle,
       circle: (info?.circle as string) || '',
       tags: (info?.tags as string[]) || [],
       cover: (info?.localCover as string) || null,
@@ -156,12 +180,34 @@ export default function AddGameModal({
       lastPlayedAt: null,
       playCount: 0,
       playTime: 0,
-      isFavorite: false
+      isFavorite: false,
+      folderSize
     }
 
     await onAdd(game)
     setProcessing(false)
     onClose()
+  }
+
+  const handleApplyDlsite = async (): Promise<void> => {
+    const code = manualDlsite.trim().toUpperCase()
+    if (!code.match(/^[RVB]J\d{6,8}$/i)) return
+    setApplyingCode(true)
+    setFile((f) => f ? { ...f, code, fetchingInfo: true, info: null } : f)
+    const r = await window.electronAPI.fetchInfo(code)
+    setFile((f) => f ? { ...f, fetchingInfo: false, info: r.success ? (r.data ?? null) : null } : f)
+    setApplyingCode(false)
+  }
+
+  const handleApplySteam = async (): Promise<void> => {
+    const appId = manualSteam.trim()
+    if (!appId.match(/^\d+$/)) return
+    const steamCode = `ST${appId}`
+    setApplyingCode(true)
+    setFile((f) => f ? { ...f, code: steamCode, fetchingInfo: true, info: null } : f)
+    const r = await window.electronAPI.fetchSteamInfo(appId)
+    setFile((f) => f ? { ...f, fetchingInfo: false, info: r.success ? (r.data ?? null) : null } : f)
+    setApplyingCode(false)
   }
 
   const coverUrl = file?.info?.coverUrl as string | undefined
@@ -203,12 +249,50 @@ export default function AddGameModal({
               <span className="stat-label">偵測代碼</span>
               {file.code
                 ? <span className="preview-dest">{file.code}</span>
-                : <span style={{ color: 'var(--text2)' }}>未找到遊戲代碼，將以空白資訊新增</span>
+                : <span className="preview-dest nf-code">將指派代碼 {nextNFCode(existingIds)}</span>
               }
             </div>
           </div>
 
           {error && <div className="form-error">{error}</div>}
+
+          {/* Manual code entry when no code was auto-detected */}
+          {noAutoCode && (
+            <div className="manual-code-section">
+              <div className="manual-code-row">
+                <span className="stat-label">DLsite 代碼</span>
+                <input
+                  className="manual-code-input"
+                  placeholder="RJ000000"
+                  value={manualDlsite}
+                  onChange={(e) => setManualDlsite(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleApplyDlsite()}
+                  disabled={applyingCode}
+                />
+                <button
+                  className="manual-code-apply"
+                  onClick={handleApplyDlsite}
+                  disabled={!manualDlsite.trim() || applyingCode}
+                >套用</button>
+              </div>
+              <div className="manual-code-row">
+                <span className="stat-label">Steam App ID</span>
+                <input
+                  className="manual-code-input"
+                  placeholder="2074890"
+                  value={manualSteam}
+                  onChange={(e) => setManualSteam(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleApplySteam()}
+                  disabled={applyingCode}
+                />
+                <button
+                  className="manual-code-apply"
+                  onClick={handleApplySteam}
+                  disabled={!manualSteam.trim() || applyingCode}
+                >套用</button>
+              </div>
+            </div>
+          )}
 
           {/* DLsite info */}
           {file.code && (
@@ -243,17 +327,23 @@ export default function AddGameModal({
             <div className="file-preview-info analyzing">分析中...</div>
           )}
 
-          {!file.previewing && file.type === 'exe' && file.movePreview && gamesDir && (
+          {!file.previewing && file.type === 'exe' && gamesDir && (
             <div className="file-preview">
-              {file.movePreview.willMove ? (
+              <label className="skip-move-label">
+                <input
+                  type="checkbox"
+                  checked={skipMove}
+                  onChange={(e) => setSkipMove(e.target.checked)}
+                />
+                不搬移資料夾（直接記錄原始路徑）
+              </label>
+              {!skipMove && file.movePreview && (
                 <div className="file-preview-info">
                   <span className="preview-arrow">移動</span>
                   <span className="preview-src">{file.movePreview.srcFolder}</span>
                   <span className="preview-arrow">→</span>
                   <span className="preview-dest">{file.movePreview.destFolder}</span>
                 </div>
-              ) : (
-                <div className="file-preview-info warn">路徑中未找到 RJ 代碼資料夾，將直接記錄路徑</div>
               )}
             </div>
           )}

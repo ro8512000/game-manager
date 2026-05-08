@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import type { Game } from '../types'
 import { ALL_COLUMNS } from '../types'
-import { formatPlayTime } from '../utils'
+import { formatPlayTime, formatFileSize } from '../utils'
 
 type SortDir = 'asc' | 'desc' | null
 
@@ -14,6 +14,9 @@ interface Props {
   onMoveColumn: (fromIdx: number, toIdx: number) => void
   onLaunch: (game: Game) => void
   onContextMenu: (game: Game, e: React.MouseEvent) => void
+  initialColWidths?: Record<string, number>
+  initialSortKey?: string | null
+  initialSortDir?: 'asc' | 'desc' | null
 }
 
 function defaultPx(key: string): number {
@@ -37,6 +40,7 @@ function getCellValue(game: Game, key: string): string | number | null {
     case 'lastPlayedAt': return game.lastPlayedAt ?? null
     case 'playCount':    return game.playCount ?? 0
     case 'playTime':     return game.playTime ?? 0
+    case 'folderSize':   return game.folderSize ?? null
     default: return null
   }
 }
@@ -55,6 +59,7 @@ function renderCell(game: Game, key: string): string {
     case 'lastPlayedAt': return game.lastPlayedAt || '從未遊玩'
     case 'playCount':    return `${game.playCount ?? 0} 次`
     case 'playTime':     return formatPlayTime(game.playTime ?? 0)
+    case 'folderSize':   return game.folderSize != null ? formatFileSize(game.folderSize) : '-'
     default: return ''
   }
 }
@@ -67,17 +72,17 @@ export default function GameList({
   onToggleColumn,
   onMoveColumn,
   onLaunch,
-  onContextMenu
+  onContextMenu,
+  initialColWidths = {},
+  initialSortKey = null,
+  initialSortDir = null
 }: Props): React.JSX.Element {
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [hoverPreview, setHoverPreview] = useState<{ game: Game; x: number; y: number; imgSrc: string | null } | null>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
-    try { return JSON.parse(localStorage.getItem('listColWidths') ?? 'null') || {} }
-    catch { return {} }
-  })
-  const [sortKey, setSortKey] = useState<string | null>(() => localStorage.getItem('listSortKey') || null)
-  const [sortDir, setSortDir] = useState<SortDir>(() => (localStorage.getItem('listSortDir') as SortDir) || null)
+  const [colWidths, setColWidths] = useState<Record<string, number>>(initialColWidths)
+  const [sortKey, setSortKey] = useState<string | null>(initialSortKey)
+  const [sortDir, setSortDir] = useState<SortDir>(initialSortDir)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -131,7 +136,7 @@ export default function GameList({
     const onUp = (): void => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseup', onUp)
-      setColWidths((prev) => { localStorage.setItem('listColWidths', JSON.stringify(prev)); return prev })
+      setColWidths((prev) => { window.electronAPI.saveUiSettings({ listColWidths: prev }); return prev })
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -140,12 +145,13 @@ export default function GameList({
   const handleSortClick = (key: string): void => {
     if (sortKey !== key) {
       setSortKey(key); setSortDir('asc')
-      localStorage.setItem('listSortKey', key); localStorage.setItem('listSortDir', 'asc')
+      window.electronAPI.saveUiSettings({ listSortKey: key, listSortDir: 'asc' })
     } else if (sortDir === 'asc') {
-      setSortDir('desc'); localStorage.setItem('listSortDir', 'desc')
+      setSortDir('desc')
+      window.electronAPI.saveUiSettings({ listSortDir: 'desc' })
     } else {
       setSortKey(null); setSortDir(null)
-      localStorage.removeItem('listSortKey'); localStorage.removeItem('listSortDir')
+      window.electronAPI.saveUiSettings({ listSortKey: null, listSortDir: null })
     }
   }
 

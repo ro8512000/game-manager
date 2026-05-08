@@ -1,14 +1,17 @@
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+process.stdout.write('')
+import { app, shell, BrowserWindow, ipcMain, dialog, screen } from 'electron'
 import { join, basename, extname, relative, parse as parsePath, dirname } from 'path'
 import {
   existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
+  appendFileSync,
+  unlinkSync,
   readdirSync,
   statSync,
   createWriteStream,
-  cpSync
+  copyFileSync
 } from 'fs'
 import { rename, rm } from 'fs/promises'
 import { get as httpsGet } from 'https'
@@ -17,6 +20,7 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+
 import icon from '../../resources/icon.png?asset'
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -27,15 +31,49 @@ const appRoot = app.isPackaged ? app.getPath('userData') : app.getAppPath()
 const dataDir = join(appRoot, 'data')
 const gamesFile = join(dataDir, 'games.json')
 const settingsFile = join(dataDir, 'settings.json')
+const uiSettingsFile = join(dataDir, 'ui-settings.json')
 const gameImagesDir = join(appRoot, 'game-images')
+const logDir = join(appRoot, 'logs')
 
 interface Settings {
   gamesDir: string | null
 }
 
+function cleanOldLogs(): void {
+  if (!existsSync(logDir)) return
+  const cutoff = Date.now() - 3 * 24 * 60 * 60 * 1000
+  for (const file of readdirSync(logDir)) {
+    if (!file.endsWith('.log')) continue
+    try {
+      if (statSync(join(logDir, file)).mtimeMs < cutoff) unlinkSync(join(logDir, file))
+    } catch { /* skip */ }
+  }
+}
+
+function logError(context: string, err: unknown): void {
+  try {
+    if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true })
+    const now = new Date()
+    const date = now.toISOString().slice(0, 10)
+    const time = now.toISOString().slice(11, 19)
+    appendFileSync(join(logDir, `${date}.log`), `[${date} ${time}] [${context}] ${String(err)}\n`, 'utf-8')
+  } catch { /* never crash on logging */ }
+}
+
+function loadUiSettings(): Record<string, unknown> {
+  if (!existsSync(uiSettingsFile)) return {}
+  try { return JSON.parse(readFileSync(uiSettingsFile, 'utf-8')) } catch { return {} }
+}
+
+function saveUiSettings(patch: Record<string, unknown>): void {
+  const current = loadUiSettings()
+  writeFileSync(uiSettingsFile, JSON.stringify({ ...current, ...patch }, null, 2), 'utf-8')
+}
+
 function ensureDirs(): void {
   if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true })
   if (!existsSync(gameImagesDir)) mkdirSync(gameImagesDir, { recursive: true })
+  cleanOldLogs()
 }
 
 function loadSettings(): Settings {
@@ -45,6 +83,29 @@ function loadSettings(): Settings {
   } catch {
     return { gamesDir: null }
   }
+}
+
+// Strip absolute prefix and return path relative to gameImagesDir (e.g. "RJ01234/main.jpg")
+function toRelativeImagePath(p: string): string {
+  if (!p) return p
+  const normalized = p.replace(/\\/g, '/')
+  const idx = normalized.lastIndexOf('/game-images/')
+  if (idx !== -1) return normalized.slice(idx + '/game-images/'.length)
+  // Already relative (no drive letter, no leading slash)
+  if (!normalized.match(/^[A-Za-z]:/) && !normalized.startsWith('/')) return p
+  return basename(p)
+}
+
+// Resolve a stored path (relative or stale absolute) to absolute using current gameImagesDir
+function toAbsoluteImagePath(p: string): string {
+  if (!p) return p
+  const normalized = p.replace(/\\/g, '/')
+  // Stale absolute path containing game-images anywhere in it → extract relative part
+  const idx = normalized.lastIndexOf('/game-images/')
+  if (idx !== -1) return join(gameImagesDir, normalized.slice(idx + '/game-images/'.length))
+  // Already relative
+  if (!normalized.match(/^[A-Za-z]:/) && !normalized.startsWith('/')) return join(gameImagesDir, p)
+  return p
 }
 
 // Extract first RJ/VJ/BJ code found anywhere in the file path
@@ -72,13 +133,39 @@ function findRJAncestorFromPath(filePath: string): { ancestor: string; code: str
   return null
 }
 
-// Move a directory; falls back to copy+delete for cross-drive moves
+// Recursively sum file sizes in a directory
+function getDirSize(dirPath: string): number {
+  let total = 0
+  try {
+    for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+      try {
+        const full = join(dirPath, entry.name)
+        if (entry.isDirectory()) total += getDirSize(full)
+        else if (entry.isFile()) total += statSync(full).size
+      } catch { /* skip permission errors */ }
+    }
+  } catch { /* skip */ }
+  return total
+}
+
+// Recursive directory copy using copyFileSync (handles Unicode paths correctly on Windows)
+function copyDirSync(src: string, dest: string): void {
+  mkdirSync(dest, { recursive: true })
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    const s = join(src, entry.name)
+    const d = join(dest, entry.name)
+    if (entry.isDirectory()) copyDirSync(s, d)
+    else if (entry.isFile()) copyFileSync(s, d)
+  }
+}
+
+// Move a directory; falls back to manual copy+delete for cross-drive moves
 async function moveDir(src: string, dest: string): Promise<void> {
   try {
     await rename(src, dest)
   } catch (e: unknown) {
     if ((e as NodeJS.ErrnoException).code === 'EXDEV') {
-      cpSync(src, dest, { recursive: true })
+      copyDirSync(src, dest)
       await rm(src, { recursive: true, force: true })
     } else {
       throw e
@@ -106,9 +193,10 @@ async function findRJCodeInArchive(archivePath: string): Promise<string | null> 
 }
 
 // Extract archive using 7-Zip into outputDir
+// -mcp=932 tells 7-zip to treat non-UTF8 filenames as Shift-JIS (Japanese ZIP standard)
 async function extract7z(archivePath: string, outputDir: string): Promise<void> {
   mkdirSync(outputDir, { recursive: true })
-  await execFileAsync(path7za, ['x', archivePath, `-o${outputDir}`, '-y'])
+  await execFileAsync(path7za, ['x', archivePath, `-o${outputDir}`, '-y', '-mcp=932'])
 }
 
 function fetchHTML(url: string, redirectCount = 0): Promise<string> {
@@ -116,7 +204,7 @@ function fetchHTML(url: string, redirectCount = 0): Promise<string> {
     if (redirectCount > 5) return reject(new Error('Too many redirects'))
     const options = {
       headers: {
-        Cookie: 'locale=zh_TW',
+        Cookie: 'locale=ja_JP',
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       }
@@ -174,7 +262,7 @@ async function fetchDLsiteInfo(
 
     const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/)
     let title = titleMatch ? titleMatch[1] : code
-    title = title.replace(/\s*[|｜]\s*DLsite.*$/, '').trim()
+    title = title.replace(/\s*[|｜]\s*DLsite.*$/, '').replace(/\s*\[[^\]]*\]\s*$/, '').trim()
 
     const coverMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/)
     const coverUrl = coverMatch ? coverMatch[1] : null
@@ -291,9 +379,16 @@ async function fetchDLsiteInfo(
 let mainWindow: BrowserWindow | null = null
 
 function createWindow(): void {
+  const display = screen.getPrimaryDisplay()
+  const { width: sw, height: sh } = display.workAreaSize
+  const saved = loadUiSettings()
+  const savedW = typeof saved.windowWidth === 'number' && saved.windowWidth > 0 ? saved.windowWidth : null
+  const savedH = typeof saved.windowHeight === 'number' && saved.windowHeight > 0 ? saved.windowHeight : null
+  const winW = savedW ?? (sw > 100 ? Math.min(1280, sw) : 1280)
+  const winH = savedH ?? (sh > 100 ? Math.min(800, sh) : 800)
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: winW,
+    height: winH,
     minWidth: 800,
     minHeight: 600,
     show: false,
@@ -306,6 +401,16 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow!.show())
+
+  let resizeTimer: ReturnType<typeof setTimeout> | null = null
+  mainWindow.on('resize', () => {
+    if (resizeTimer) clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(() => {
+      if (!mainWindow) return
+      const [w, h] = mainWindow.getSize()
+      saveUiSettings({ windowWidth: w, windowHeight: h })
+    }, 500)
+  })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -355,8 +460,10 @@ app.whenReady().then(() => {
         releaseDate: g.releaseDate ?? null,
         workType: g.workType ?? null,
         dlsiteRating: g.dlsiteRating ?? null,
-        sampleImages: g.sampleImages ?? [],
-        isFavorite: g.isFavorite ?? false
+        sampleImages: ((g.sampleImages as string[]) ?? []).map(toAbsoluteImagePath),
+        isFavorite: g.isFavorite ?? false,
+        folderSize: g.folderSize ?? null,
+        cover: g.cover ? toAbsoluteImagePath(g.cover as string) : null
       }))
       return raw
     } catch {
@@ -367,7 +474,15 @@ app.whenReady().then(() => {
   ipcMain.handle('games:save', (_, data) => {
     try {
       ensureDirs()
-      writeFileSync(gamesFile, JSON.stringify(data, null, 2), 'utf-8')
+      const normalized = {
+        ...data,
+        games: data.games.map((g: Record<string, unknown>) => ({
+          ...g,
+          cover: g.cover ? toRelativeImagePath(g.cover as string) : null,
+          sampleImages: ((g.sampleImages as string[]) ?? []).map(toRelativeImagePath)
+        }))
+      }
+      writeFileSync(gamesFile, JSON.stringify(normalized, null, 2), 'utf-8')
       return true
     } catch {
       return false
@@ -395,13 +510,15 @@ app.whenReady().then(() => {
         stdio: 'ignore',
         cwd: dirname(exePath)
       })
-      // Don't unref — keep tracking so we can measure play time
-      child.on('close', () => {
+      child.on('error', (e) => logError('games:launch', `gameId=${gameId} exe=${exePath} ${e}`))
+      child.on('close', (code) => {
+        if (code !== 0 && code !== null) logError('games:launch', `gameId=${gameId} exited with code ${code}`)
         const elapsed = Math.round((Date.now() - startTime) / 1000)
         mainWindow?.webContents.send('game:session-end', { gameId, elapsed })
       })
       return true
-    } catch {
+    } catch (e) {
+      logError('games:launch', `gameId=${gameId} exe=${exePath} ${e}`)
       return false
     }
   })
@@ -445,6 +562,15 @@ app.whenReady().then(() => {
 
   ipcMain.handle('games:deleteFolder', async (_, folderPath: string) => {
     try { await rm(folderPath, { recursive: true, force: true }); return true } catch { return false }
+  })
+
+  ipcMain.handle('games:getFolderSize', (_, folderPath: string): number | null => {
+    if (!folderPath || !existsSync(folderPath)) return null
+    try { return getDirSize(folderPath) } catch { return null }
+  })
+
+  ipcMain.handle('games:deleteFile', async (_, filePath: string) => {
+    try { await rm(filePath, { force: true }); return true } catch (e) { logError('games:deleteFile', e); return false }
   })
 
   ipcMain.handle('shell:openExternal', (_, url: string) => {
@@ -503,9 +629,9 @@ app.whenReady().then(() => {
     'games:previewMove',
     (_, { exePath, gamesDir }: { exePath: string; gamesDir: string }) => {
       const found = findRJAncestorFromPath(exePath)
-      if (!found) return { willMove: false }
-      const { ancestor: srcFolder, code } = found
+      const srcFolder = found ? found.ancestor : dirname(exePath)
       const destFolder = join(gamesDir, basename(srcFolder))
+      const code = found?.code ?? null
       return { willMove: true, srcFolder, destFolder, code, relExePath: relative(srcFolder, exePath) }
     }
   )
@@ -521,16 +647,13 @@ app.whenReady().then(() => {
     }
   )
 
-  // Move game folder to library (auto-detects RJ ancestor)
+  // Move game folder to library (uses RJ ancestor if found, otherwise parent folder of exe)
   ipcMain.handle(
     'games:moveToLibrary',
     async (_, { exePath, gamesDir }: { exePath: string; gamesDir: string }) => {
       try {
         const found = findRJAncestorFromPath(exePath)
-        if (!found) {
-          return { success: true, moved: false, exePath, folderPath: dirname(exePath) }
-        }
-        const { ancestor: srcFolder } = found
+        const srcFolder = found ? found.ancestor : dirname(exePath)
         const destFolder = join(gamesDir, basename(srcFolder))
         mkdirSync(gamesDir, { recursive: true })
         mainWindow?.webContents.send('progress:step', { msg: '正在移動遊戲資料...', pct: 0 })
@@ -563,6 +686,11 @@ app.whenReady().then(() => {
     }
   )
 
+  ipcMain.handle('ui:load', () => loadUiSettings())
+  ipcMain.handle('ui:save', (_, patch: Record<string, unknown>) => {
+    try { ensureDirs(); saveUiSettings(patch); return true } catch (e) { logError('ui:save', e); return false }
+  })
+
   ipcMain.handle('games:scanFolder', (_, folderPath: string) => {
     try {
       const items = readdirSync(folderPath)
@@ -587,11 +715,85 @@ app.whenReady().then(() => {
       if (!imgPath || !existsSync(imgPath)) return null
       const data = readFileSync(imgPath)
       const ext = imgPath.split('.').pop()?.toLowerCase() || 'jpg'
-      const mime = ext === 'png' ? 'image/png' : 'image/jpeg'
+      const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
       return `data:${mime};base64,${data.toString('base64')}`
     } catch {
       return null
     }
+  })
+
+  ipcMain.handle('games:fetchSteamInfo', async (_, appId: string) => {
+    try {
+      const apiUrl = `https://store.steampowered.com/api/appdetails?appids=${appId}&l=tchinese`
+      mainWindow?.webContents.send('progress:step', { msg: 'Steam 資訊抓取中...', pct: 0 })
+      const text = await fetchHTML(apiUrl)
+      const json = JSON.parse(text)
+      const entry = json[appId]
+      if (!entry?.success || !entry.data) return { success: false, error: '找不到此 Steam 遊戲' }
+      const d = entry.data
+
+      const codeImagesDir = join(gameImagesDir, `ST${appId}`)
+      mkdirSync(codeImagesDir, { recursive: true })
+
+      const allImages: { url: string; name: string }[] = []
+      if (d.header_image) allImages.push({ url: d.header_image, name: 'main' })
+      for (const [i, ss] of ((d.screenshots as { path_thumbnail?: string; path_full?: string }[]) ?? []).slice(0, 6).entries()) {
+        const url = ss.path_thumbnail || ss.path_full
+        if (url) allImages.push({ url, name: `smp${i + 1}` })
+      }
+
+      const total = allImages.length
+      let done = 0
+      let localCover: string | null = null
+      const localSamples: string[] = []
+
+      for (const { url, name } of allImages) {
+        mainWindow?.webContents.send('progress:step', { msg: `下載圖片 ${done + 1}/${total}`, pct: Math.round((done / Math.max(total, 1)) * 100) })
+        const cleanUrl = url.startsWith('//') ? `https:${url}` : url
+        const ext = extname(cleanUrl.split('?')[0]) || '.jpg'
+        const imgPath = join(codeImagesDir, `${name}${ext}`)
+        try {
+          await downloadImage(cleanUrl, imgPath)
+          if (name === 'main') localCover = imgPath
+          else localSamples.push(imgPath)
+        } catch { /* skip */ }
+        done++
+      }
+      mainWindow?.webContents.send('progress:step', { msg: `✓ Steam 資訊完成`, pct: 100 })
+
+      return {
+        success: true,
+        data: {
+          title: (d.name as string) ?? '',
+          circle: ((d.developers as string[]) ?? []).join(' / '),
+          tags: ((d.genres as { description: string }[]) ?? []).map((g) => g.description),
+          coverUrl: (d.header_image as string) ?? null,
+          localCover,
+          releaseDate: (d.release_date as { date?: string })?.date ?? null,
+          sampleImages: localSamples,
+          workType: null,
+          dlsiteRating: null
+        }
+      }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('games:uploadImage', async (_, { gameId, role }: { gameId: string; role: 'cover' | 'sample' }) => {
+    const r = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: '圖片', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'] }]
+    })
+    if (r.canceled) return null
+    const srcPath = r.filePaths[0]
+    const ext = extname(srcPath).toLowerCase() || '.jpg'
+    const destDir = join(gameImagesDir, gameId)
+    mkdirSync(destDir, { recursive: true })
+    const destName = role === 'cover' ? `main${ext}` : `smp_${Date.now()}${ext}`
+    const destPath = join(destDir, destName)
+    copyFileSync(srcPath, destPath)
+    return destPath
   })
 
   createWindow()
