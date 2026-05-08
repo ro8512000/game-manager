@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import type { Game } from '../types'
 import { ALL_COLUMNS } from '../types'
 import { formatPlayTime, formatFileSize, getGroupValue } from '../utils'
@@ -107,8 +107,34 @@ export default function GameList({
   onGroupByChange
 }: Props): React.JSX.Element {
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
-  const [hoverPreview, setHoverPreview] = useState<{ game: Game; x: number; y: number; imgSrc: string | null } | null>(null)
+  const [hoverPreview, setHoverPreview] = useState<{
+    game: Game; x: number; y: number
+    sources: (string | null)[]  // null = loading
+    currentIdx: number
+  } | null>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isOverPreviewRef = useRef(false)
+  const hoverPreviewRef = useRef(hoverPreview)
+  useEffect(() => { hoverPreviewRef.current = hoverPreview }, [hoverPreview])
+
+  // Callback ref: attach non-passive wheel listener directly to preview div
+  const previewRef = useCallback((node: HTMLDivElement | null) => {
+    if (!node) return
+    const handler = (e: WheelEvent): void => {
+      e.preventDefault()
+      e.stopPropagation()
+      const current = hoverPreviewRef.current
+      if (!current) return
+      const total = current.sources.length
+      if (total <= 1) return
+      const delta = e.deltaY > 0 ? 1 : -1
+      setHoverPreview(prev =>
+        prev ? { ...prev, currentIdx: (prev.currentIdx + delta + total) % total } : null
+      )
+    }
+    node.addEventListener('wheel', handler, { passive: false })
+  }, [])
   const [colWidths, setColWidths] = useState<Record<string, number>>(initialColWidths)
   const [sortKey, setSortKey] = useState<string | null>(initialSortKey)
   const [sortDir, setSortDir] = useState<SortDir>(initialSortDir)
@@ -134,25 +160,63 @@ export default function GameList({
     if (hoverTimer.current) clearTimeout(hoverTimer.current)
     const { clientX: x, clientY: y } = e
     hoverTimer.current = setTimeout(async () => {
-      let imgSrc: string | null = null
-      // Prefer local file (returns base64, always works offline)
-      if (game.cover) {
-        imgSrc = await window.electronAPI.getImageData(game.cover)
+      const localPaths = [game.cover, ...(game.sampleImages ?? [])].filter((p): p is string => !!p)
+      const remoteFallback = game.coverUrl
+        ? (game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl)
+        : null
+
+      // Load first image
+      let firstSrc: string | null = null
+      if (localPaths[0]) firstSrc = await window.electronAPI.getImageData(localPaths[0])
+      if (!firstSrc && remoteFallback) firstSrc = remoteFallback
+      if (!firstSrc) return
+
+      const totalCount = localPaths.length || (remoteFallback ? 1 : 0)
+      const sources: (string | null)[] = new Array(totalCount).fill(null)
+      sources[0] = firstSrc
+      setHoverPreview({ game, x, y, sources, currentIdx: 0 })
+
+      // Preload remaining images in background
+      for (let i = 1; i < localPaths.length; i++) {
+        const idx = i
+        window.electronAPI.getImageData(localPaths[idx]).then(data => {
+          if (!data) return
+          setHoverPreview(prev => {
+            if (!prev || prev.game.uuid !== game.uuid) return prev
+            const next = [...prev.sources]; next[idx] = data
+            return { ...prev, sources: next }
+          })
+        })
       }
-      if (!imgSrc && game.sampleImages?.[0]) {
-        imgSrc = await window.electronAPI.getImageData(game.sampleImages[0])
-      }
-      // Fallback to remote URL
-      if (!imgSrc && game.coverUrl) {
-        imgSrc = game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl
-      }
-      if (imgSrc) setHoverPreview({ game, x, y, imgSrc })
     }, 300)
+  }
+
+  const scheduleHide = (): void => {
+    if (hideTimer.current) clearTimeout(hideTimer.current)
+    hideTimer.current = setTimeout(() => {
+      if (!isOverPreviewRef.current) setHoverPreview(null)
+    }, 150)
+  }
+
+  const cancelHide = (): void => {
+    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
   }
 
   const handleRowLeave = (): void => {
     if (hoverTimer.current) clearTimeout(hoverTimer.current)
-    setHoverPreview(null)
+    scheduleHide()
+  }
+
+  const handleRowWheel = (game: Game, e: React.WheelEvent): void => {
+    // Wheel on the row also cycles images (while mouse is on the row)
+    if (!hoverPreview || hoverPreview.game.uuid !== game.uuid) return
+    const total = hoverPreview.sources.length
+    if (total <= 1) return
+    e.preventDefault()
+    const delta = e.deltaY > 0 ? 1 : -1
+    setHoverPreview(prev =>
+      prev ? { ...prev, currentIdx: (prev.currentIdx + delta + total) % total } : null
+    )
   }
 
   const startResize = (key: string, e: React.MouseEvent): void => {
@@ -312,6 +376,7 @@ export default function GameList({
                 onContextMenu={(e) => onContextMenu(game, e)}
                 onMouseEnter={(e) => handleRowEnter(game, e)}
                 onMouseLeave={handleRowLeave}
+                onWheel={(e) => handleRowWheel(game, e)}
                 >
                   {/* Fixed thumbnail cell */}
                   <span className="col-cell col-thumb">
@@ -329,15 +394,27 @@ export default function GameList({
       </div>
 
       {/* Image hover preview */}
-      {hoverPreview?.imgSrc && (
+      {hoverPreview && hoverPreview.sources.some(Boolean) && (
         <div
+          ref={previewRef}
           className="list-hover-preview"
           style={{
             top: Math.min(hoverPreview.y - 10, window.innerHeight - 230),
-            left: hoverPreview.x > window.innerWidth * 0.6 ? hoverPreview.x - 340 : hoverPreview.x + 18
+            left: hoverPreview.x > window.innerWidth * 0.6 ? hoverPreview.x - 340 : hoverPreview.x + 18,
+            pointerEvents: 'auto'
           }}
+          onMouseEnter={() => { isOverPreviewRef.current = true; cancelHide() }}
+          onMouseLeave={() => { isOverPreviewRef.current = false; scheduleHide() }}
         >
-          <img src={hoverPreview.imgSrc} alt="" />
+          {hoverPreview.sources[hoverPreview.currentIdx]
+            ? <img src={hoverPreview.sources[hoverPreview.currentIdx]!} alt="" />
+            : <div className="preview-loading">載入中...</div>
+          }
+          {hoverPreview.sources.length > 1 && (
+            <div className="preview-counter">
+              {hoverPreview.currentIdx + 1} / {hoverPreview.sources.length}
+            </div>
+          )}
         </div>
       )}
 

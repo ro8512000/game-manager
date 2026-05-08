@@ -19,16 +19,19 @@ game-manager/
 │       ├── App.css            ← 全域深色主題樣式
 │       ├── types.ts           ← 型別定義（Game、ColumnDef、ALL_COLUMNS 等）
 │       ├── electron.d.ts      ← window.electronAPI 型別宣告
-│       ├── utils.ts           ← 工具函式（localDateTime / formatPlayTime / formatFileSize / getGameSortValue）
+│       ├── utils.ts           ← 工具函式（findDuplicates / getGroupValue / getGameSortValue 等）
 │       └── components/
 │           ├── Sidebar.tsx        ← 左側篩選欄
 │           ├── GameGrid.tsx       ← 磁磚瀏覽容器
 │           ├── GameCard.tsx       ← 磁磚卡片（16:9 比例）
-│           ├── GameList.tsx       ← 列表瀏覽（可排序、可調欄寬、hover 預覽）
+│           ├── GameList.tsx       ← 列表瀏覽（排序/分組/hover預覽/縮圖）
 │           ├── GameDetail.tsx     ← 右側詳情面板（可拉寬）
 │           ├── ImageLightbox.tsx  ← 圖片燈箱（鍵盤/滾輪切換）
 │           ├── GameContextMenu.tsx← 右鍵選單
 │           ├── AddGameModal.tsx   ← 新增遊戲（自動偵測代碼、進度條）
+│           ├── DuplicateModal.tsx ← 重複遊戲偵測
+│           ├── BatchFetchModal.tsx← 批量重新抓取 DLsite 資訊
+│           ├── ImportModal.tsx    ← 匯入舊版 GameManager 0.49 資料
 │           └── SettingsModal.tsx  ← 設定（遊戲儲存目錄）
 ├── data/
 │   ├── games.json             ← 遊戲資料庫
@@ -37,6 +40,7 @@ game-manager/
 ├── game-images/               ← 封面圖快取（每款遊戲獨立子資料夾）
 │   └── {code}/
 │       ├── main.jpg           ← 主封面
+│       ├── sam.jpg            ← 列表縮圖（_img_sam，25x25 小圖）
 │       ├── smp1.webp          ← 樣本圖 1
 │       └── smp2.webp ...
 ├── logs/                      ← 錯誤日誌（自動清除 3 天前的）
@@ -57,6 +61,7 @@ interface Game {
   circle: string            // 社團名 / 開發商
   tags: string[]
   cover: string | null      // 本地封面圖相對路徑（game-images/{code}/main.jpg）
+  listImage: string | null  // 列表縮圖相對路徑（game-images/{code}/sam.jpg）
   coverUrl: string | null   // 遠端封面 URL（備用）
   sampleImages: string[]    // 樣本圖本地相對路徑陣列
   path: string | null       // 遊戲資料夾路徑
@@ -108,6 +113,7 @@ interface Game {
 | `listColumns` | 可見欄位 key 陣列（有序） |
 | `listColWidths` | 欄寬 `{key: px}` |
 | `listSortKey` / `listSortDir` | 列表排序欄位 / 方向 |
+| `listGroupBy` | 列表分組欄位 |
 | `gridSortKey` / `gridSortDir` | 磁磚排序欄位 / 方向 |
 | `detailWidth` | 右側面板寬度（px） |
 | `windowWidth` / `windowHeight` | 視窗大小 |
@@ -133,7 +139,7 @@ interface Game {
 |------|------|
 | `games:load` | 讀取 games.json（自動補缺少欄位、展開圖片相對路徑） |
 | `games:save` | 儲存 games.json（壓縮圖片路徑為相對路徑） |
-| `games:fetchInfo(code)` | DLsite 抓取（日文）：標題/社團/tag/評分/發售日/圖片 |
+| `games:fetchInfo(code)` | DLsite 抓取（日文）：標題/社團/tag/評分/發售日/圖片（含 sam.jpg） |
 | `games:fetchSteamInfo(appId)` | Steam API 抓取：標題/開發商/tag/發售日/截圖 |
 | `games:extractCode(str)` | 從字串擷取 RJ/VJ/BJ 代碼 |
 
@@ -147,7 +153,7 @@ interface Game {
 | `games:deleteFolder(path)` | 刪除資料夾 |
 | `games:deleteFile(path)` | 刪除單一檔案（刪除圖片用） |
 | `games:getFolderSize(path)` | 遞迴計算資料夾大小（bytes） |
-| `games:uploadImage({gameId, role})` | 開啟對話框上傳圖片至 game-images/{gameId}/ |
+| `games:uploadImage({gameId, role})` | 上傳圖片；role: `'cover'`/`'listImage'`/`'sample'` |
 
 ### 檔案選擇
 | 通道 | 說明 |
@@ -164,6 +170,13 @@ interface Game {
 | `games:moveToLibrary({exePath, gamesDir})` | 移動遊戲資料夾到 gamesDir（跨磁碟用 copyFileSync） |
 | `games:previewExtract({archivePath, gamesDir})` | 預覽解壓縮目標位置 |
 | `games:extractArchive({archivePath, gamesDir})` | 解壓縮（-mcp=932 處理日文 Shift-JIS 檔名） |
+
+### 匯入
+| 通道 | 說明 |
+|------|------|
+| `import:selectDb` | 開啟對話框選 Games.db |
+| `import:preview(dbPath)` | 讀取 SQLite 預覽遊戲數量 |
+| `import:run({dbPath, skipDuplicates, existingIds})` | 執行匯入，複製圖片，回傳 Game 陣列 |
 
 ### 事件（主程式 → renderer）
 | 通道 | 說明 |
@@ -193,15 +206,28 @@ interface Game {
 
 ### DLsite 爬蟲
 - 網址：RJ→`/maniax/`、VJ→`/home/`、BJ→`/boys-love/`
-- Cookie：`locale=ja_JP`（日文原文）
-- 抓取：og:title（去掉社團名和 DLsite 後綴）、og:image、`.maker_name`、`ジャンル` tags、`作品形式`、DLsite 評分、`販売日`
-- 圖片存到 `game-images/{code}/`（main + smp1/smp2...）
+- Cookie：`locale=ja_JP`（日文原文，tags 為日文）
+- 標題：去掉 `[社團名]` 後綴和 `| DLsite...` 後綴
+- 抓取：og:title、og:image、`.maker_name`、`ジャンル` tags（3 種方式）、`作品形式`、DLsite 評分、`販売日`
+- 圖片存到 `game-images/{code}/`（`main.jpg` + `sam.jpg` + `smp1/smp2`...）
+- `sam.jpg`：由 cover URL 將 `_img_main` 替換為 `_img_sam` 取得，作為列表縮圖
 
 ### Steam 爬蟲
 - API：`https://store.steampowered.com/api/appdetails?appids={appId}&l=tchinese`
 - 抓取：名稱、開發商、genres、header_image、screenshots（最多 6 張）、發售日
 - 圖片存到 `game-images/ST{appId}/`
 - 遊戲代碼格式：`ST{appId}`
+
+### 匯入舊版 GameManager 0.49
+- 讀取 SQLite `Games.db`（使用 `sql.js`）
+- 欄位對應：RJCode→id、Title→title、Circle→circle、Tags→tags、Comments→note、Rating→rating、Size(KB)→folderSize(bytes) 等
+- 圖片複製：`IsListImage=1`→`sam.jpg`、`IsCoverImage=1`→`main.jpg`、其餘→`smp{n}.jpg`
+- 遊戲目錄不搬移，只更新路徑
+
+### 批量更新 DLsite 資訊
+- 對當前篩選列表中的 DLsite 遊戲（RJ/VJ/BJ）逐筆重新抓取
+- 工具列顯示「↻ 批量更新 (N)」按鈕，N 為可更新數量
+- 顯示整體進度 + 單筆進度，支援中途停止
 
 ### 遊玩時間計算
 - `spawn` 啟動遊戲（detached，保留 close 事件）
@@ -211,7 +237,6 @@ interface Game {
 ### 錯誤日誌
 - 位置：`{appRoot}/logs/YYYY-MM-DD.log`（每天一檔）
 - 自動清除 3 天前的舊 log
-- 記錄：games:launch 錯誤、非 0 exit code、games:deleteFile 錯誤等
 
 ---
 
@@ -231,27 +256,30 @@ interface Game {
 - 排序設定持久化
 
 ### GameList（列表視圖）
-- 動態欄位（右鍵標題列選擇，含「大小」欄位）
+- **列表縮圖**：每行最左固定 32px 縮圖欄（顯示 `sam.jpg` 或遠端 `_img_sam` fallback）
+- 動態欄位（右鍵標題列選擇，含大小、遊玩時間等欄位）
 - 欄位可拖拉調整寬度、拖拉換順序
-- 點擊欄位標題排序（無→▲→▼→無）
-- 整體表格橫向捲動
-- 滑鼠停留 300ms 顯示封面圖預覽
+- 點擊欄位標題排序（無→▲→▼→無）；空值永遠排最後
+- **分組顯示**：Toolbar 分組下拉選單（社團/評分/作品形式/來源/發售年份/各月份選項）
+- **日期欄位自動分組**：點擊加入時間/發售日/上次遊玩排序時，自動套用對應月份分組
+- 滑鼠停留 300ms 顯示封面圖預覽；移到預覽圖上可滾輪切換圖片（背景列表不捲動）
 - 雙擊啟動遊戲
-- 所有欄位/排序/寬度設定持久化
+- 所有欄位/排序/分組/寬度設定持久化
 
 ### GameDetail（右側面板）
 - 可拖拉左邊緣調整寬度（220~600px），持久化
-- **代碼可編輯**（點擊）
-- **標題可編輯**（點擊）
+- **代碼可編輯**（點擊），標題可編輯（點擊）
 - **↻ 重新抓取資訊**（DLsite/Steam 遊戲），顯示進度條
-- 圖片管理：✎ 進入編輯模式 → 縮圖顯示 × 可刪除；封面 hover 顯示上傳按鈕；縮圖列有 + 上傳樣本圖
+- **圖片管理**（index 0=封面, 1=列表縮圖, 2+=樣本圖）：
+  - ✎ 進入編輯模式 → 每張圖片顯示 × 可刪除
+  - 封面/縮圖 hover 顯示上傳按鈕
+  - 縮圖 slot 有「縮圖」標籤識別
+  - 縮圖列末端有 + 上傳樣本圖
 - 圖片點擊開啟燈箱（鍵盤/滾輪切換、Esc 關閉）
-- Tag 編輯模式（點 ✎ → 顯示 × 移除鈕 + 新增輸入框 + 自動補全）
-- 我的最愛切換（♡/♥）
-- DLsite ↗ / Steam ↗ 連結按鈕
-- ⚙ 啟動檔案設定
-- 備注編輯 + 儲存
-- 統計：發售日、DLsite 評分、加入時間、遊玩次數、遊玩時間、上次遊玩、**磁碟大小**（含 ↻ 重新計算）
+- Tag 編輯模式（✎ → × 移除 + 新增輸入框 + 自動補全）
+- 我的最愛切換（♡/♥）、DLsite ↗ / Steam ↗ 連結
+- ⚙ 啟動檔案設定、備注編輯 + 儲存
+- 統計：發售日、DLsite 評分、加入時間、遊玩次數、遊玩時間、上次遊玩、磁碟大小（含 ↻）
 
 ### 右鍵選單（GameContextMenu）
 - 開啟遊戲 / DLsite 頁面 / Steam 頁面 / 開啟遊戲資料夾
@@ -261,9 +289,20 @@ interface Game {
 ### AddGameModal（新增遊戲）
 - 自動偵測代碼，顯示 DLsite/Steam 資訊預覽
 - 無代碼時：顯示 DLsite 代碼 / Steam App ID 手動輸入欄
-- exe 加入時：「不搬移資料夾」選項（勾選後直接記錄原始路徑）
-- 顯示移動/解壓縮預覽路徑
-- 進度條
+- exe 加入時：「不搬移資料夾」選項
+- 顯示移動/解壓縮預覽路徑，進度條
+
+### DuplicateModal（重複偵測）
+- 標題列「重複偵測」按鈕開啟（有遊戲時顯示）
+- 依 `game.id` 找出重複群組，checkbox 選取要移除的條目
+
+### BatchFetchModal（批量更新）
+- 工具列「↻ 批量更新 (N)」按鈕（列表中有 DLsite 遊戲時顯示）
+- 依序抓取，整體進度 + 單筆進度，可中途停止
+
+### ImportModal（匯入舊版）
+- 標題列「匯入舊版」按鈕
+- 選擇 Games.db → 預覽數量 → 執行匯入，自動複製圖片
 
 ---
 
@@ -284,6 +323,8 @@ interface Game {
 5. **ZIP 解壓縮**加 `-mcp=932`，處理日文 Shift-JIS 編碼的傳統 ZIP 檔名。
 6. **遊玩時間**：若 Electron 在遊戲關閉前強制退出，該次時間不會記錄。
 7. **啟動 workaround**：main/index.ts 最頂端的 `process.stdout.write('')` 提供 event loop tick，避免特定環境的 Chromium GPU 初始化 race condition 崩潰，請勿移除。
+8. **列表分組+排序**：分組排序方向與欄位排序方向一致；空值群組（從未遊玩/未知日期等）永遠排最後。
+9. **Hover preview 滾輪**：使用 callback ref + `addEventListener('wheel', ..., { passive: false })` 阻止背景捲動，不可用 React `onWheel`（passive 限制）。
 
 ---
 
