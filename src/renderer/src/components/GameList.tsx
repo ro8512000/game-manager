@@ -23,8 +23,22 @@ interface Props {
 
 function ListThumb({ game }: { game: Game }): React.JSX.Element {
   const [src, setSrc] = useState<string | null>(null)
+  const isSteam = game.id.startsWith('ST')
   useEffect(() => {
     setSrc(null)
+    if (isSteam) {
+      // Steam: use cover image directly
+      if (game.cover) {
+        window.electronAPI.getImageData(game.cover).then((data) => {
+          if (data) { setSrc(data); return }
+          if (game.coverUrl) setSrc(game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl)
+        })
+      } else if (game.coverUrl) {
+        setSrc(game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl)
+      }
+      return
+    }
+    // DLsite/other: listImage → _img_sam fallback
     if (game.listImage) {
       window.electronAPI.getImageData(game.listImage).then((data) => {
         if (data) { setSrc(data); return }
@@ -35,13 +49,10 @@ function ListThumb({ game }: { game: Game }): React.JSX.Element {
     }
     function setFallback() {
       if (!game.coverUrl) return
-      const isDLsite = /^[RVB]J\d{6,8}$/i.test(game.id)
-      const url = isDLsite
-        ? game.coverUrl.replace('_img_main', '_img_sam')
-        : game.coverUrl
+      const url = game.coverUrl.replace('_img_main', '_img_sam')
       setSrc(url.startsWith('//') ? `https:${url}` : url)
     }
-  }, [game.listImage, game.coverUrl, game.id])
+  }, [game.listImage, game.cover, game.coverUrl, game.id, isSteam])
   if (!src) return <div className="list-thumb-empty" />
   return <img src={src} alt="" className="list-thumb-img" onError={() => setSrc(null)} />
 }

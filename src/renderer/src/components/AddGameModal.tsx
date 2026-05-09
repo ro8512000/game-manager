@@ -182,7 +182,8 @@ export default function AddGameModal({
       playCount: 0,
       playTime: 0,
       isFavorite: false,
-      folderSize
+      folderSize,
+      launchLocale: null
     }
 
     await onAdd(game)

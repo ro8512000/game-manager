@@ -57,8 +57,11 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
     setDeleteFiles(false)
     setImgEditMode(false)
 
-    // index 0=cover, 1=listImage, 2+=sampleImages
-    const allPaths = [game.cover, game.listImage, ...(game.sampleImages ?? [])]
+    const isSteamGame = game.id.startsWith('ST')
+    // Steam: index 0=cover, 1+=sampleImages; others: 0=cover, 1=listImage, 2+=sampleImages
+    const allPaths = isSteamGame
+      ? [game.cover, ...(game.sampleImages ?? [])]
+      : [game.cover, game.listImage, ...(game.sampleImages ?? [])]
     setImgSrcs(new Array(allPaths.length).fill(null))
 
     allPaths.forEach((imgPath, i) => {
@@ -116,13 +119,14 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
     if (size !== null) onUpdate({ ...game, folderSize: size })
   }
 
+  const isSteam = game.id.startsWith('ST')
   const coverFallback = game.coverUrl
     ? game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl
     : null
-  const listImgFallback = game.coverUrl
+  const listImgFallback = (!isSteam && game.coverUrl)
     ? (() => { const u = (game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl).replace('_img_main', '_img_sam'); return u })()
     : null
-  const activeImgSrc = imgSrcs[activeIdx] ?? (activeIdx === 0 ? coverFallback : activeIdx === 1 ? listImgFallback : null)
+  const activeImgSrc = imgSrcs[activeIdx] ?? (activeIdx === 0 ? coverFallback : (!isSteam && activeIdx === 1) ? listImgFallback : null)
 
   const handleLaunch = async (): Promise<void> => {
     let exeToLaunch = game.exe
@@ -131,7 +135,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
     }
     if (!exeToLaunch) return
 
-    window.electronAPI.launchGame({ exePath: exeToLaunch, gameId: game.id })
+    window.electronAPI.launchGame({ exePath: exeToLaunch, gameId: game.id, locale: game.launchLocale })
 
     const updated: Game = {
       ...game,
@@ -190,13 +194,13 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
       if (game.cover) await window.electronAPI.deleteFile(game.cover)
       onUpdate({ ...game, cover: null })
       setImgSrcs((prev) => { const next = [...prev]; next[0] = null; return next })
-    } else if (idx === 1) {
+    } else if (!isSteam && idx === 1) {
       if (game.listImage) await window.electronAPI.deleteFile(game.listImage)
       onUpdate({ ...game, listImage: null })
       setImgSrcs((prev) => { const next = [...prev]; next[1] = null; return next })
       if (activeIdx === 1) setActiveIdx(0)
     } else {
-      const sampleIdx = idx - 2
+      const sampleIdx = isSteam ? idx - 1 : idx - 2
       const path = game.sampleImages?.[sampleIdx]
       if (path) await window.electronAPI.deleteFile(path)
       const newSamples = (game.sampleImages ?? []).filter((_, i) => i !== sampleIdx)
@@ -238,7 +242,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
     onDelete(game.uuid)
   }
 
-  const totalImages = 2 + (game.sampleImages?.length ?? 0)  // cover + listImage + samples
+  const totalImages = (isSteam ? 1 : 2) + (game.sampleImages?.length ?? 0)
 
   return (
     <aside className="detail-panel">
@@ -259,7 +263,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
             ↑ 上傳封面
           </button>
         )}
-        {!imgEditMode && activeIdx === 1 && (
+        {!isSteam && !imgEditMode && activeIdx === 1 && (
           <button className="btn-upload-cover" title="上傳列表縮圖" onClick={(e) => { e.stopPropagation(); handleUploadListImage() }}>
             ↑ 上傳縮圖
           </button>
@@ -269,7 +273,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
             × 刪除封面
           </button>
         )}
-        {imgEditMode && activeIdx === 1 && (
+        {!isSteam && imgEditMode && activeIdx === 1 && (
           <button className="btn-delete-img-cover" title="刪除縮圖" onClick={(e) => { e.stopPropagation(); handleDeleteImage(1) }}>
             × 刪除縮圖
           </button>
@@ -289,7 +293,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
                   ? <img src={imgSrcs[i]!} alt={`img ${i + 1}`} />
                   : <div className="thumb-placeholder" />
                 }
-                {i === 1 && <span className="thumb-label-badge">縮圖</span>}
+                {!isSteam && i === 1 && <span className="thumb-label-badge">縮圖</span>}
               </button>
               {imgEditMode && (
                 <button className="thumb-delete-btn" onClick={() => handleDeleteImage(i)} title="刪除">×</button>
@@ -452,6 +456,21 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
         </div>
         <div className="exe-path-display" title={game.exe || ''}>
           {game.exe || <span style={{ color: 'var(--text2)', fontStyle: 'italic' }}>未設定啟動檔案</span>}
+        </div>
+
+        <div className="launch-locale-row">
+          <span className="launch-locale-label">啟動語系</span>
+          <select
+            className="locale-select"
+            value={game.launchLocale ?? ''}
+            onChange={(e) => onUpdate({ ...game, launchLocale: e.target.value || null })}
+          >
+            <option value="">正常啟動</option>
+            <option value="ja">日語 (Locale Emulator)</option>
+            <option value="zh-TW">繁體中文 (Locale Emulator)</option>
+            <option value="zh-CN">簡體中文 (Locale Emulator)</option>
+            <option value="ko">韓語 (Locale Emulator)</option>
+          </select>
         </div>
 
         <textarea

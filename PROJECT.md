@@ -1,5 +1,7 @@
 # Game Manager — 專案說明文件
 
+> **給 AI 的規則**：每次對程式碼進行功能修改後，必須同步更新本文件（PROJECT.md），將新增、變更、或移除的功能、IPC 通道、資料欄位、元件行為、注意事項等內容補充進對應章節，保持文件與程式碼一致。
+
 ## 概覽
 
 Windows 桌面應用程式，功能類似 Steam，用來管理 DLsite / Steam 遊戲庫。  
@@ -61,11 +63,12 @@ interface Game {
   circle: string            // 社團名 / 開發商
   tags: string[]
   cover: string | null      // 本地封面圖相對路徑（game-images/{code}/main.jpg）
-  listImage: string | null  // 列表縮圖相對路徑（game-images/{code}/sam.jpg）
+  listImage: string | null  // 列表縮圖相對路徑（game-images/{code}/sam.jpg）；Steam 遊戲不使用
   coverUrl: string | null   // 遠端封面 URL（備用）
   sampleImages: string[]    // 樣本圖本地相對路徑陣列
   path: string | null       // 遊戲資料夾路徑
   exe: string | null        // 啟動 exe 路徑
+  launchLocale: string | null  // Locale Emulator 語系（null=正常啟動；'ja'/'zh-TW'/'zh-CN'/'ko'=LE 啟動）
   rating: number            // 個人評分 0-5
   note: string
   addedAt: string           // 加入時間（YYYY-MM-DD HH:MM:SS）
@@ -100,9 +103,10 @@ interface Game {
 
 ### settings.json
 ```json
-{ "gamesDir": "G:/Games" }
+{ "gamesDir": "G:/Games", "leProcPath": "C:/LEd/LEProc.exe" }
 ```
 - `gamesDir`：新增遊戲時，遊戲資料夾移動/解壓縮的目標目錄
+- `leProcPath`：Locale Emulator 的 `LEProc.exe` 路徑；設定後可對個別遊戲啟用 LE 啟動
 
 ### ui-settings.json
 所有 UI 狀態存此檔（不用 localStorage，避免 dev server port 變動造成重置）：
@@ -146,7 +150,7 @@ interface Game {
 ### 遊戲操作
 | 通道 | 說明 |
 |------|------|
-| `games:launch({exePath, gameId})` | spawn 啟動 exe（detached，計時，記錄錯誤） |
+| `games:launch({exePath, gameId, locale?})` | spawn 啟動 exe（detached，計時，記錄錯誤）；locale 有值且設定了 leProcPath 時改用 `LEProc.exe {exePath}` 啟動 |
 | `games:openFolder(path)` | shell.openPath 開啟資料夾 |
 | `games:findExe(folderPath)` | 在資料夾內搜尋 exe（深度≤4，跳過 setup/install） |
 | `games:getImageData(imgPath)` | 讀本地圖片返回 base64 data URL |
@@ -177,6 +181,13 @@ interface Game {
 | `import:selectDb` | 開啟對話框選 Games.db |
 | `import:preview(dbPath)` | 讀取 SQLite 預覽遊戲數量 |
 | `import:run({dbPath, skipDuplicates, existingIds})` | 執行匯入，複製圖片，回傳 Game 陣列 |
+
+### 資料位置管理
+| 通道 | 說明 |
+|------|------|
+| `data:getLocationInfo` | 回傳目前資料根目錄、是否攜帶式模式、exe 目錄、AppData 目錄 |
+| `data:migrateToPortable` | 將 `data/` 和 `game-images/` 複製到 exe 旁，刪除原始檔，重新啟動（進度透過 `progress:step` 推送） |
+| `data:migrateToAppData` | 將攜帶式資料複製回 AppData，刪除 exe 旁資料，重新啟動 |
 
 ### 事件（主程式 → renderer）
 | 通道 | 說明 |
@@ -229,6 +240,18 @@ interface Game {
 - 工具列顯示「↻ 批量更新 (N)」按鈕，N 為可更新數量
 - 顯示整體進度 + 單筆進度，支援中途停止
 
+### Locale Emulator 啟動
+- 遊戲詳情面板的「啟動語系」下拉選單（正常啟動 / 日語 / 繁體中文 / 簡體中文 / 韓語）
+- 選擇語系後存入 `game.launchLocale`，下次啟動自動帶入
+- 主程式啟動邏輯：`launchLocale` 非空且 `settings.leProcPath` 存在時，改用 `spawn(leProcPath, [exePath])` 啟動
+- Locale Emulator 路徑在設定頁（SettingsModal）設定
+
+### 攜帶式模式
+- **判斷規則**（packaged）：exe 旁若存在 `data/games.json` 則為攜帶式模式，否則用 AppData
+- **開發模式**：優先讀取環境變數 `GAME_DATA_ROOT`（`.env.local` 設定，已加入 .gitignore）；未設定則用專案根目錄
+- 設定頁顯示當前模式（攜帶式/AppData badge）和實際路徑
+- 搬移按鈕：複製 `data/` 和 `game-images/` 到目標位置 → 刪除來源 → `app.relaunch()` 重啟，全程顯示進度條
+
 ### 遊玩時間計算
 - `spawn` 啟動遊戲（detached，保留 close 事件）
 - 關閉時發送 `game:session-end`，renderer 累加 `playTime`
@@ -256,7 +279,7 @@ interface Game {
 - 排序設定持久化
 
 ### GameList（列表視圖）
-- **列表縮圖**：每行最左固定 32px 縮圖欄（顯示 `sam.jpg` 或遠端 `_img_sam` fallback）
+- **列表縮圖**：每行最左固定 32px 縮圖欄；DLsite 遊戲顯示 `sam.jpg` 或遠端 `_img_sam` fallback，Steam 遊戲改用 `main.jpg`（cover）
 - 動態欄位（右鍵標題列選擇，含大小、遊玩時間等欄位）
 - 欄位可拖拉調整寬度、拖拉換順序
 - 點擊欄位標題排序（無→▲→▼→無）；空值永遠排最後
@@ -270,15 +293,16 @@ interface Game {
 - 可拖拉左邊緣調整寬度（220~600px），持久化
 - **代碼可編輯**（點擊），標題可編輯（點擊）
 - **↻ 重新抓取資訊**（DLsite/Steam 遊戲），顯示進度條
-- **圖片管理**（index 0=封面, 1=列表縮圖, 2+=樣本圖）：
+- **圖片管理**：
+  - DLsite/其他：index 0=封面, 1=列表縮圖（有「縮圖」badge）, 2+=樣本圖
+  - Steam：index 0=封面, 1+=樣本圖（無列表縮圖 slot）
   - ✎ 進入編輯模式 → 每張圖片顯示 × 可刪除
   - 封面/縮圖 hover 顯示上傳按鈕
-  - 縮圖 slot 有「縮圖」標籤識別
   - 縮圖列末端有 + 上傳樣本圖
 - 圖片點擊開啟燈箱（鍵盤/滾輪切換、Esc 關閉）
 - Tag 編輯模式（✎ → × 移除 + 新增輸入框 + 自動補全）
 - 我的最愛切換（♡/♥）、DLsite ↗ / Steam ↗ 連結
-- ⚙ 啟動檔案設定、備注編輯 + 儲存
+- ⚙ 啟動檔案設定、**啟動語系**下拉選單（Locale Emulator）、備注編輯 + 儲存
 - 統計：發售日、DLsite 評分、加入時間、遊玩次數、遊玩時間、上次遊玩、磁碟大小（含 ↻）
 
 ### 右鍵選單（GameContextMenu）
@@ -304,6 +328,11 @@ interface Game {
 - 標題列「匯入舊版」按鈕
 - 選擇 Games.db → 預覽數量 → 執行匯入，自動複製圖片
 
+### SettingsModal（設定）
+- 選擇 `gamesDir`（遊戲儲存目錄）
+- 選擇 `leProcPath`（LEProc.exe 路徑），用於 Locale Emulator 啟動
+- **資料儲存位置**：顯示當前模式 badge（攜帶式/AppData）和路徑，提供一鍵搬移按鈕（附進度條）
+
 ---
 
 ## 視窗行為
@@ -325,6 +354,9 @@ interface Game {
 7. **啟動 workaround**：main/index.ts 最頂端的 `process.stdout.write('')` 提供 event loop tick，避免特定環境的 Chromium GPU 初始化 race condition 崩潰，請勿移除。
 8. **列表分組+排序**：分組排序方向與欄位排序方向一致；空值群組（從未遊玩/未知日期等）永遠排最後。
 9. **Hover preview 滾輪**：使用 callback ref + `addEventListener('wheel', ..., { passive: false })` 阻止背景捲動，不可用 React `onWheel`（passive 限制）。
+10. **攜帶式模式判斷**（packaged）：`getAppRoot()` 檢查 exe 旁是否有 `data/games.json`，有則用 exe 目錄，否則用 AppData；搬移後 `app.relaunch()` 重啟讓新路徑生效。
+11. **Steam 遊戲無 listImage**：`listImage` 欄位只給 DLsite/其他遊戲使用；Steam 遊戲的列表縮圖改用 `cover`（main.jpg），詳情面板圖片索引也不含 listImage slot。
+12. **Locale Emulator**：`leProcPath` 為空或 `launchLocale` 為 null 時正常啟動，不呼叫 LE；LE 不支援的語系直接在 select 選項控制，不需額外判斷。
 
 ---
 

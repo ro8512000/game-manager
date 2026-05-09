@@ -2,6 +2,7 @@ import type { GamesData, Game } from './types'
 
 export interface Settings {
   gamesDir: string | null
+  leProcPath: string | null
 }
 
 export interface PreviewMoveResult {
@@ -16,6 +17,14 @@ export interface PreviewExtractResult {
   detectedCode: string | null
   destFolder: string
   method: 'filename' | 'archive' | 'name'
+}
+
+export interface DataLocationInfo {
+  isDev: boolean
+  isPortable: boolean
+  currentRoot: string
+  exeDir: string | null
+  appDataDir: string | null
 }
 
 export interface MoveResult {
@@ -44,7 +53,7 @@ interface ElectronAPI {
   fetchInfo: (code: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
   fetchSteamInfo: (appId: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
   extractCode: (str: string) => Promise<string | null>
-  launchGame: (args: { exePath: string; gameId: string }) => Promise<boolean>
+  launchGame: (args: { exePath: string; gameId: string; locale?: string | null }) => Promise<boolean>
   openFolder: (folderPath: string) => Promise<boolean>
   selectFolder: () => Promise<string | null>
   selectExe: () => Promise<string | null>
@@ -60,6 +69,9 @@ interface ElectronAPI {
   selectImportDb: () => Promise<string | null>
   importPreview: (dbPath: string) => Promise<{ success: boolean; count?: number; error?: string }>
   importRun: (args: { dbPath: string; skipDuplicates: boolean; existingIds: string[] }) => Promise<{ success: boolean; imported: Record<string, unknown>[]; skipped: number; errors: string[]; error?: string }>
+  getDataLocationInfo: () => Promise<DataLocationInfo>
+  migrateToPortable: () => Promise<{ success: boolean; error?: string }>
+  migrateToAppData: () => Promise<{ success: boolean; error?: string }>
   loadUiSettings: () => Promise<Record<string, unknown>>
   saveUiSettings: (patch: Record<string, unknown>) => Promise<boolean>
   onProgress: (callback: (data: { msg: string; pct: number }) => void) => () => void

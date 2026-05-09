@@ -614,6 +614,13 @@ button.primary:hover { background: var(--accent-hover); }
 .settings-section { display: flex; flex-direction: column; gap: 8px; }
 .settings-label { font-size: 12px; color: var(--text2); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
 .settings-hint { font-size: 11px; color: var(--text2); line-height: 1.5; }
+.data-location-box { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.data-location-path { font-size: 11px; font-family: monospace; color: var(--text); word-break: break-all; }
+.mode-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; letter-spacing: 0.5px; width: fit-content; }
+.mode-portable { background: #1a4a2a; color: #5ecf7e; }
+.mode-appdata { background: #1e2d4a; color: #5b9cf6; }
+.migrate-btn { background: var(--bg3); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 7px 12px; border-radius: 6px; cursor: pointer; text-align: left; }
+.migrate-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* File selection in AddGameModal */
 .file-section { display: flex; flex-direction: column; gap: 8px; }
@@ -1207,6 +1214,10 @@ button.primary:hover { background: var(--accent-hover); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.launch-locale-row { display: flex; align-items: center; gap: 8px; }
+.launch-locale-label { font-size: 11px; color: var(--text2); white-space: nowrap; }
+.locale-select { flex: 1; background: var(--bg3); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; font-size: 11px; font-family: inherit; cursor: pointer; }
+.locale-select:focus { outline: none; border-color: var(--accent); }
 
 /* List dynamic columns */
 .col-cell {

@@ -29,7 +29,15 @@ import icon from '../../resources/icon.png?asset'
 const { path7za } = require('7zip-bin') as { path7za: string }
 const execFileAsync = promisify(execFile)
 
-const appRoot = app.isPackaged ? app.getPath('userData') : app.getAppPath()
+function getAppRoot(): string {
+  if (!app.isPackaged) {
+    return process.env.GAME_DATA_ROOT || app.getAppPath()
+  }
+  const exeDir = dirname(app.getPath('exe'))
+  if (existsSync(join(exeDir, 'data', 'games.json'))) return exeDir
+  return app.getPath('userData')
+}
+const appRoot = getAppRoot()
 const dataDir = join(appRoot, 'data')
 const gamesFile = join(dataDir, 'games.json')
 const settingsFile = join(dataDir, 'settings.json')
@@ -39,6 +47,36 @@ const logDir = join(appRoot, 'logs')
 
 interface Settings {
   gamesDir: string | null
+  leProcPath: string | null
+}
+
+function countFiles(dir: string): number {
+  if (!existsSync(dir)) return 0
+  let n = 0
+  for (const e of readdirSync(dir, { withFileTypes: true }))
+    n += e.isDirectory() ? countFiles(join(dir, e.name)) : 1
+  return n
+}
+
+async function copyDirProgress(
+  src: string,
+  dest: string,
+  counter: { done: number },
+  total: number,
+  onStep: (done: number, total: number) => void
+): Promise<void> {
+  if (!existsSync(src)) return
+  mkdirSync(dest, { recursive: true })
+  for (const e of readdirSync(src, { withFileTypes: true })) {
+    const s = join(src, e.name), d = join(dest, e.name)
+    if (e.isDirectory()) {
+      await copyDirProgress(s, d, counter, total, onStep)
+    } else {
+      copyFileSync(s, d)
+      counter.done++
+      onStep(counter.done, total)
+    }
+  }
 }
 
 function cleanOldLogs(): void {
@@ -79,11 +117,12 @@ function ensureDirs(): void {
 }
 
 function loadSettings(): Settings {
-  if (!existsSync(settingsFile)) return { gamesDir: null }
+  if (!existsSync(settingsFile)) return { gamesDir: null, leProcPath: null }
   try {
-    return JSON.parse(readFileSync(settingsFile, 'utf-8'))
+    const s = JSON.parse(readFileSync(settingsFile, 'utf-8'))
+    return { gamesDir: s.gamesDir ?? null, leProcPath: s.leProcPath ?? null }
   } catch {
-    return { gamesDir: null }
+    return { gamesDir: null, leProcPath: null }
   }
 }
 
@@ -482,6 +521,7 @@ app.whenReady().then(() => {
         sampleImages: ((g.sampleImages as string[]) ?? []).map(toAbsoluteImagePath),
         isFavorite: g.isFavorite ?? false,
         folderSize: g.folderSize ?? null,
+        launchLocale: g.launchLocale ?? null,
         cover: g.cover ? toAbsoluteImagePath(g.cover as string) : null,
         listImage: g.listImage ? toAbsoluteImagePath(g.listImage as string) : null
       }))
@@ -523,10 +563,15 @@ app.whenReady().then(() => {
   })
 
   // Launch exe; track session duration and notify renderer on exit
-  ipcMain.handle('games:launch', (_, { exePath, gameId }: { exePath: string; gameId: string }) => {
+  ipcMain.handle('games:launch', (_, { exePath, gameId, locale }: { exePath: string; gameId: string; locale?: string | null }) => {
     try {
+      const settings = loadSettings()
+      const useLE = !!locale && !!settings.leProcPath && existsSync(settings.leProcPath)
+      const cmd = useLE ? settings.leProcPath! : exePath
+      const args = useLE ? [exePath] : []
+
       const startTime = Date.now()
-      const child = spawn(exePath, [], {
+      const child = spawn(cmd, args, {
         detached: true,
         stdio: 'ignore',
         cwd: dirname(exePath)
@@ -996,6 +1041,76 @@ app.whenReady().then(() => {
     const destPath = join(destDir, destName)
     copyFileSync(srcPath, destPath)
     return destPath
+  })
+
+  // ── Data location & migration ─────────────────────────────────────────────
+  ipcMain.handle('data:getLocationInfo', () => {
+    if (!app.isPackaged) {
+      return { isDev: true, isPortable: false, currentRoot: appRoot, exeDir: null, appDataDir: null }
+    }
+    const exeDir = dirname(app.getPath('exe'))
+    return {
+      isDev: false,
+      isPortable: appRoot === exeDir,
+      currentRoot: appRoot,
+      exeDir,
+      appDataDir: app.getPath('userData')
+    }
+  })
+
+  ipcMain.handle('data:migrateToPortable', async () => {
+    if (!app.isPackaged) return { success: false, error: '開發模式不支援搬移' }
+    const exeDir = dirname(app.getPath('exe'))
+    if (appRoot === exeDir) return { success: false, error: '已是攜帶式模式' }
+    try {
+      const srcData = join(appRoot, 'data')
+      const srcImages = join(appRoot, 'game-images')
+      const total = countFiles(srcData) + countFiles(srcImages)
+      const counter = { done: 0 }
+      const onStep = (done: number, tot: number): void => {
+        mainWindow?.webContents.send('progress:step', { msg: `正在複製... (${done}/${tot})`, pct: Math.round((done / Math.max(tot, 1)) * 88) })
+      }
+      mainWindow?.webContents.send('progress:step', { msg: '正在複製資料...', pct: 0 })
+      await copyDirProgress(srcData, join(exeDir, 'data'), counter, total, onStep)
+      await copyDirProgress(srcImages, join(exeDir, 'game-images'), counter, total, onStep)
+      mainWindow?.webContents.send('progress:step', { msg: '正在清除原始資料...', pct: 92 })
+      await rm(srcData, { recursive: true, force: true })
+      await rm(srcImages, { recursive: true, force: true })
+      mainWindow?.webContents.send('progress:step', { msg: '完成！正在重新啟動...', pct: 100 })
+      setTimeout(() => { app.relaunch(); app.exit(0) }, 1500)
+      return { success: true }
+    } catch (e) {
+      logError('data:migrateToPortable', e)
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('data:migrateToAppData', async () => {
+    if (!app.isPackaged) return { success: false, error: '開發模式不支援搬移' }
+    const exeDir = dirname(app.getPath('exe'))
+    if (appRoot !== exeDir) return { success: false, error: '目前不是攜帶式模式' }
+    const appDataDir = app.getPath('userData')
+    try {
+      const srcData = join(exeDir, 'data')
+      const srcImages = join(exeDir, 'game-images')
+      const total = countFiles(srcData) + countFiles(srcImages)
+      const counter = { done: 0 }
+      const onStep = (done: number, tot: number): void => {
+        mainWindow?.webContents.send('progress:step', { msg: `正在複製... (${done}/${tot})`, pct: Math.round((done / Math.max(tot, 1)) * 88) })
+      }
+      mainWindow?.webContents.send('progress:step', { msg: '正在複製資料...', pct: 0 })
+      await copyDirProgress(srcData, join(appDataDir, 'data'), counter, total, onStep)
+      await copyDirProgress(srcImages, join(appDataDir, 'game-images'), counter, total, onStep)
+      mainWindow?.webContents.send('progress:step', { msg: '正在清除攜帶式資料...', pct: 92 })
+      await rm(srcData, { recursive: true, force: true })
+      await rm(srcImages, { recursive: true, force: true })
+      mainWindow?.webContents.send('progress:step', { msg: '完成！正在重新啟動...', pct: 100 })
+      setTimeout(() => { app.relaunch(); app.exit(0) }, 1500)
+      return { success: true }
+    } catch (e) {
+      logError('data:migrateToAppData', e)
+      return { success: false, error: String(e) }
+    }
   })
 
   createWindow()

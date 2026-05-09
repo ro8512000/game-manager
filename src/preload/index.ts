@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   fetchInfo: (code: string) => ipcRenderer.invoke('games:fetchInfo', code),
   fetchSteamInfo: (appId: string) => ipcRenderer.invoke('games:fetchSteamInfo', appId),
   extractCode: (str: string) => ipcRenderer.invoke('games:extractCode', str),
-  launchGame: (args: { exePath: string; gameId: string }) => ipcRenderer.invoke('games:launch', args),
+  launchGame: (args: { exePath: string; gameId: string; locale?: string | null }) => ipcRenderer.invoke('games:launch', args),
   openFolder: (folderPath: string) => ipcRenderer.invoke('games:openFolder', folderPath),
   deleteFolder: (folderPath: string) => ipcRenderer.invoke('games:deleteFolder', folderPath),
   deleteFile: (filePath: string) => ipcRenderer.invoke('games:deleteFile', filePath),
@@ -37,6 +37,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectImportDb: () => ipcRenderer.invoke('import:selectDb'),
   importPreview: (dbPath: string) => ipcRenderer.invoke('import:preview', dbPath),
   importRun: (args: unknown) => ipcRenderer.invoke('import:run', args),
+
+  // Data location & migration
+  getDataLocationInfo: () => ipcRenderer.invoke('data:getLocationInfo'),
+  migrateToPortable: () => ipcRenderer.invoke('data:migrateToPortable'),
+  migrateToAppData: () => ipcRenderer.invoke('data:migrateToAppData'),
 
   // UI settings (file-based, survives dev port changes)
   loadUiSettings: () => ipcRenderer.invoke('ui:load'),

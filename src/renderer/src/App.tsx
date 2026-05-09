@@ -19,7 +19,7 @@ type InitialFile = { path: string; type: 'exe' | 'archive'; code: string | null 
 
 export default function App(): React.JSX.Element {
   const [data, setData] = useState<GamesData>({ games: [] })
-  const [settings, setSettings] = useState<Settings>({ gamesDir: null })
+  const [settings, setSettings] = useState<Settings>({ gamesDir: null, leProcPath: null })
   const [selected, setSelected] = useState<Game | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
   const [initColWidths, setInitColWidths] = useState<Record<string, number>>({})

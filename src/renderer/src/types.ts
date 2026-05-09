@@ -22,6 +22,7 @@ export interface Game {
   isFavorite: boolean
   folderSize: number | null
   listImage: string | null   // small thumbnail (_img_sam) for list view
+  launchLocale: string | null  // locale for Locale Emulator (null = normal launch)
 }
 
 export type ViewMode = 'grid' | 'list'
