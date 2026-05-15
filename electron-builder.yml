@@ -13,11 +13,10 @@ asarUnpack:
   - resources/**
 win:
   executableName: dlsite-manager-v2
-nsis:
-  artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
+  target:
+    - target: zip
+      arch:
+        - x64
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
