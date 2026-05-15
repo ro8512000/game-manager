@@ -13,6 +13,7 @@ import GameContextMenu, { getDLsiteUrl } from './components/GameContextMenu'
 import DuplicateModal from './components/DuplicateModal'
 import ImportModal from './components/ImportModal'
 import BatchFetchModal from './components/BatchFetchModal'
+import ScanFolderModal from './components/ScanFolderModal'
 import './App.css'
 
 type InitialFile = { path: string; type: 'exe' | 'archive'; code: string | null }
@@ -95,17 +96,18 @@ export default function App(): React.JSX.Element {
   const [filterTags, setFilterTags] = useState<string[]>([])
   const [filterRating, setFilterRating] = useState(0)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
-  const [filterSources, setFilterSources] = useState<('dlsite' | 'steam' | 'other')[]>(['dlsite', 'steam', 'other'])
+  const [filterSources, setFilterSources] = useState<('dlsite' | 'steam' | 'getchu' | 'other')[]>(['dlsite', 'steam', 'getchu', 'other'])
   const [ratingCollapsed, setRatingCollapsed] = useState(false)
   const [sourceCollapsed, setSourceCollapsed] = useState(false)
 
-  const getGameSource = (id: string): 'dlsite' | 'steam' | 'other' => {
+  const getGameSource = (id: string): 'dlsite' | 'steam' | 'getchu' | 'other' => {
     if (/^[RVB]J\d{6,8}$/i.test(id)) return 'dlsite'
     if (/^ST\d+$/i.test(id)) return 'steam'
+    if (/^GC\d+$/i.test(id)) return 'getchu'
     return 'other'
   }
 
-  const handleSourceToggle = (source: 'dlsite' | 'steam' | 'other'): void => {
+  const handleSourceToggle = (source: 'dlsite' | 'steam' | 'getchu' | 'other'): void => {
     setFilterSources((prev) => {
       const next = prev.includes(source) ? prev.filter((s) => s !== source) : [...prev, source]
       window.electronAPI.saveUiSettings({ filterSources: next })
@@ -142,6 +144,7 @@ export default function App(): React.JSX.Element {
   const [showDuplicates, setShowDuplicates] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [showBatchFetch, setShowBatchFetch] = useState(false)
+  const [showScan, setShowScan] = useState(false)
   const [gridSortKey, setGridSortKey] = useState<string | null>(null)
   const [gridSortDir, setGridSortDir] = useState<'asc' | 'desc'>('asc')
   const [listGroupBy, setListGroupBy] = useState<string>('')
@@ -172,7 +175,7 @@ export default function App(): React.JSX.Element {
       if (ui.listSortDir) setInitSortDir(ui.listSortDir as 'asc' | 'desc')
       if (ui.filterRating !== undefined) setFilterRating(ui.filterRating as number)
       if (ui.favoritesOnly !== undefined) setFavoritesOnly(ui.favoritesOnly as boolean)
-      if (ui.filterSources) setFilterSources(ui.filterSources as ('dlsite' | 'steam' | 'other')[])
+      if (ui.filterSources) setFilterSources(ui.filterSources as ('dlsite' | 'steam' | 'getchu' | 'other')[])
       if (ui.ratingCollapsed !== undefined) setRatingCollapsed(ui.ratingCollapsed as boolean)
       if (ui.sourceCollapsed !== undefined) setSourceCollapsed(ui.sourceCollapsed as boolean)
       if (ui.gridSortKey) setGridSortKey(ui.gridSortKey as string)
@@ -297,6 +300,7 @@ export default function App(): React.JSX.Element {
       <div className="titlebar">
         <span className="titlebar-title">Game Manager</span>
         <div className="titlebar-actions">
+          <button onClick={() => setShowScan(true)} title="掃描資料夾並批量加入遊戲">掃描資料夾</button>
           <button onClick={() => setShowImport(true)} title="從舊版 GameManager 匯入">匯入舊版</button>
           {data.games.length > 0 && (
             <button onClick={() => setShowDuplicates(true)} title="尋找重複遊戲">重複偵測</button>
@@ -437,6 +441,18 @@ export default function App(): React.JSX.Element {
           existingIds={data.games.map((g) => g.id)}
           gamesDir={settings.gamesDir}
           onOpenSettings={() => { handleCloseAdd(); setShowSettings(true) }}
+        />
+      )}
+
+      {showScan && (
+        <ScanFolderModal
+          existingGames={data.games}
+          gamesDir={settings.gamesDir}
+          onAdd={async (games) => {
+            const newData = { games: [...data.games, ...games] }
+            await save(newData)
+          }}
+          onClose={() => setShowScan(false)}
         />
       )}
 

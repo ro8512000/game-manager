@@ -51,6 +51,7 @@ interface ElectronAPI {
   loadGames: () => Promise<GamesData>
   saveGames: (data: GamesData) => Promise<boolean>
   fetchInfo: (code: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
+  fetchGetchuInfo: (id: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
   fetchSteamInfo: (appId: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
   extractCode: (str: string) => Promise<string | null>
   launchGame: (args: { exePath: string; gameId: string; locale?: string | null }) => Promise<boolean>
@@ -81,6 +82,7 @@ interface ElectronAPI {
   selectFile: () => Promise<{ path: string; type: 'exe' | 'archive'; code: string | null } | null>
   previewMove: (args: { exePath: string; gamesDir: string }) => Promise<PreviewMoveResult>
   previewExtract: (args: { archivePath: string; gamesDir: string }) => Promise<PreviewExtractResult>
+  moveFolderToLibrary: (args: { srcFolder: string; gamesDir: string }) => Promise<{ success: boolean; newFolderPath?: string; error?: string }>
   moveToLibrary: (args: { exePath: string; gamesDir: string }) => Promise<MoveResult>
   extractArchive: (args: { archivePath: string; gamesDir: string }) => Promise<ExtractResult>
 }

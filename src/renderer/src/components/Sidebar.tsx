@@ -1,10 +1,11 @@
 import { useState, useMemo } from 'react'
 
-type GameSource = 'dlsite' | 'steam' | 'other'
+type GameSource = 'dlsite' | 'steam' | 'getchu' | 'other'
 
 const SOURCE_LABELS: Record<GameSource, string> = {
   dlsite: 'DLsite 遊戲',
   steam: 'Steam 遊戲',
+  getchu: 'Getchu 遊戲',
   other: '其他遊戲'
 }
 
@@ -54,7 +55,7 @@ export default function Sidebar({
       : all
   }, [tags, selectedTags, tagSearch])
 
-  const allSources: GameSource[] = ['dlsite', 'steam', 'other']
+  const allSources: GameSource[] = ['dlsite', 'steam', 'getchu', 'other']
 
   return (
     <aside className="sidebar">

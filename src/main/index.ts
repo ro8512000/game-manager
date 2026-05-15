@@ -240,6 +240,62 @@ async function extract7z(archivePath: string, outputDir: string): Promise<void> 
   await execFileAsync(path7za, ['x', archivePath, `-o${outputDir}`, '-y', '-mcp=932'])
 }
 
+// Charset-aware fetch that also captures Set-Cookie headers and follows redirects with cookies.
+// Returns { html, cookies } where cookies is a "; "-joined string ready for the next request.
+function fetchHTMLGetCookies(
+  url: string,
+  cookie: string,
+  redirectCount = 0
+): Promise<{ html: string; cookies: string; charset: string }> {
+  return new Promise((resolve, reject) => {
+    if (redirectCount > 5) return reject(new Error('Too many redirects'))
+    const options = {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ja,en;q=0.5',
+        ...(cookie ? { 'Cookie': cookie } : {})
+      }
+    }
+    httpsGet(url, options, (res: IncomingMessage) => {
+      // Accumulate Set-Cookie into a single cookie string
+      const newPairs: string[] = ((res.headers['set-cookie'] as string[] | undefined) ?? [])
+        .map((c) => c.split(';')[0])
+      const merged = [cookie, ...newPairs].filter(Boolean).join('; ')
+
+      if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303) {
+        const location = res.headers.location
+        res.resume()
+        if (!location) return reject(new Error('Redirect without location'))
+        const next = location.startsWith('http') ? location : new URL(location, url).toString()
+        fetchHTMLGetCookies(next, merged, redirectCount + 1).then(resolve).catch(reject)
+        return
+      }
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => {
+        const buf = Buffer.concat(chunks)
+        let charset = 'utf-8'
+        const ct = (res.headers['content-type'] || '') as string
+        const ctMatch = ct.match(/charset=([^\s;]+)/i)
+        if (ctMatch) charset = ctMatch[1].toLowerCase()
+        else {
+          const preview = buf.slice(0, 2048).toString('latin1')
+          const metaMatch = preview.match(/charset=["']?([^"';\s>]+)/i)
+          if (metaMatch) charset = metaMatch[1].toLowerCase()
+        }
+        if (charset === 'shift_jis' || charset === 'sjis' || charset === 'x-sjis') charset = 'shift-jis'
+        if (charset === 'euc-jp' || charset === 'x-euc-jp') charset = 'euc-jp'
+        let html: string
+        try { html = new TextDecoder(charset).decode(buf) } catch { html = buf.toString('utf-8') }
+        resolve({ html, cookies: merged, charset })
+      })
+      res.on('error', reject)
+    }).on('error', reject)
+  })
+}
+
+
 function fetchHTML(url: string, redirectCount = 0): Promise<string> {
   return new Promise((resolve, reject) => {
     if (redirectCount > 5) return reject(new Error('Too many redirects'))
@@ -267,18 +323,22 @@ function fetchHTML(url: string, redirectCount = 0): Promise<string> {
   })
 }
 
-function downloadImage(url: string, dest: string, redirectCount = 0): Promise<void> {
+function downloadImage(url: string, dest: string, redirectCount = 0, cookie = 'locale=zh_TW', referer = ''): Promise<void> {
   return new Promise((resolve, reject) => {
     if (redirectCount > 5) return reject(new Error('Too many redirects'))
     const imageUrl = url.startsWith('//') ? `https:${url}` : url
-    httpsGet(imageUrl, { headers: { Cookie: 'locale=zh_TW' } }, (res: IncomingMessage) => {
+    httpsGet(imageUrl, { headers: { ...(cookie ? { Cookie: cookie } : {}), ...(referer ? { Referer: referer } : {}) } }, (res: IncomingMessage) => {
       if (res.statusCode === 301 || res.statusCode === 302 || res.statusCode === 303) {
         const location = res.headers.location
         res.resume()
         if (!location) return reject(new Error('Redirect without location'))
         const next = location.startsWith('http') ? location : new URL(location, imageUrl).toString()
-        downloadImage(next, dest, redirectCount + 1).then(resolve).catch(reject)
+        downloadImage(next, dest, redirectCount + 1, cookie, referer).then(resolve).catch(reject)
         return
+      }
+      if (!res.statusCode || res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume()
+        return reject(new Error(`HTTP ${res.statusCode} for ${imageUrl}`))
       }
       const file = createWriteStream(dest)
       res.pipe(file)
@@ -430,6 +490,114 @@ async function fetchDLsiteInfo(
 
     return { success: true, data: { title, circle, tags, coverUrl, localCover, localListImage, releaseDate, workType, dlsiteRating, sampleImages: localSamples } }
   } catch (e) {
+    return { success: false, error: String(e) }
+  }
+}
+
+async function fetchGetchuInfo(
+  id: string
+): Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }> {
+  try {
+    // ?gc=gc bypasses Getchu age verification directly
+    const targetUrl = `https://www.getchu.com/item/${id}?gc=gc`
+
+    const { html } = await fetchHTMLGetCookies(targetUrl, '')
+
+    // ── JSON-LD (primary source for title, brand, images) ────────────────────
+    let title = ''
+    let circle = ''
+    let coverUrl: string | null = null
+    let sampleUrls: string[] = []
+
+    const ldMatch = html.match(/<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]+?)<\/script>/)
+    if (ldMatch) {
+      try {
+        const ld = JSON.parse(ldMatch[1])
+        const product = (Array.isArray(ld['@graph']) ? ld['@graph'] : [ld])
+          .find((x: Record<string, unknown>) => x['@type'] === 'Product')
+        if (product) {
+          title = String(product.name ?? '').trim()
+          const brand = product.brand as Record<string, unknown> | undefined
+          circle = String(brand?.name ?? '').trim()
+          const imgs = (product.image as string[] | undefined) ?? []
+          if (imgs.length > 0) coverUrl = imgs[0]
+          sampleUrls = imgs.slice(1, 9)
+        }
+      } catch { /* fall through to HTML fallbacks */ }
+    }
+
+    // ── HTML fallbacks ────────────────────────────────────────────────────────
+    if (!title) {
+      const h2 = html.match(/<h2[^>]+id="soft-title"[^>]*>([\s\S]+?)<\/h2>/)
+      if (h2) title = h2[1].replace(/<[^>]+>/g, '').trim()
+    }
+    if (!title) {
+      const ogTitle = html.match(/property="og:title"[^>]+content="([^"]+)"/) ||
+                      html.match(/content="([^"]+)"[^>]+property="og:title"/)
+      if (ogTitle) title = ogTitle[1].replace(/\s*[|｜]\s*.+$/, '').trim()
+    }
+    if (!title) title = id
+
+    if (!coverUrl) {
+      const ogImg = html.match(/property="og:image"[^>]+content="([^"]+)"/) ||
+                    html.match(/content="([^"]+)"[^>]+property="og:image"/)
+      if (ogImg) {
+        coverUrl = ogImg[1].trim()
+        if (coverUrl.startsWith('/')) coverUrl = `https://www.getchu.com${coverUrl}`
+        else if (coverUrl.startsWith('//')) coverUrl = `https:${coverUrl}`
+      }
+    }
+
+    if (!circle) {
+      const brandLink = html.match(/id="brandsite"[^>]*>([^<]+)</)
+      if (brandLink) circle = brandLink[1].trim()
+    }
+
+    // ── Release date ─────────────────────────────────────────────────────────
+    let releaseDate: string | null = null
+    const rdMatch = html.match(/発売日：<\/td>\s*<td[^>]*>\s*<a[^>]*>(\d{4}\/\d{1,2}\/\d{1,2})<\/a>/)
+    if (rdMatch) releaseDate = rdMatch[1]
+
+    // ── Tags (Getchu product pages don't have a genre table row) ─────────────
+    const tags: string[] = []
+
+    // ── Download images ──────────────────────────────────────────────────────
+    // Getchu image URL pattern: rc{id}package.jpg = resized cover (used for both main & list)
+    //                           c{id}sample{n}.jpg = sample images
+    const rcCoverUrl = `https://www.getchu.com/brandnew/${id}/rc${id}package.jpg`
+    const codeImagesDir = join(gameImagesDir, `GC${id}`)
+    mkdirSync(codeImagesDir, { recursive: true })
+    const totalImgs = 1 + sampleUrls.length  // rc cover + samples
+    let imgDone = 0
+
+    mainWindow?.webContents.send('progress:step', { msg: `下載圖片 1/${totalImgs}`, pct: 0 })
+    let localCover: string | null = null
+    let localListImage: string | null = null
+    const gcReferer = 'https://www.getchu.com/'
+    try {
+      await downloadImage(rcCoverUrl, join(codeImagesDir, 'main.jpg'), 0, '', gcReferer)
+      localCover = join(codeImagesDir, 'main.jpg')
+      await downloadImage(rcCoverUrl, join(codeImagesDir, 'sam.jpg'), 0, '', gcReferer)
+      localListImage = join(codeImagesDir, 'sam.jpg')
+    } catch (e) { logError('fetchGetchuInfo:coverDownload', e) }
+    imgDone++
+
+    const localSamples: string[] = []
+    for (const [i, smpUrl] of sampleUrls.entries()) {
+      mainWindow?.webContents.send('progress:step', { msg: `下載圖片 ${imgDone + 1}/${totalImgs}`, pct: Math.round((imgDone / Math.max(totalImgs, 1)) * 100) })
+      const imgPath = join(codeImagesDir, `smp${i + 1}.jpg`)
+      try { await downloadImage(smpUrl, imgPath, 0, '', gcReferer); localSamples.push(imgPath) } catch (e) { logError('fetchGetchuInfo:sampleDownload', e) }
+      imgDone++
+    }
+    mainWindow?.webContents.send('progress:step', { msg: `✓ 圖片完成 (${imgDone} 張)`, pct: 100 })
+
+    logError('fetchGetchuInfo:done', `id=${id} localCover=${localCover} samples=${localSamples.length} title=${title}`)
+    return {
+      success: true,
+      data: { title, circle, tags, coverUrl: rcCoverUrl, localCover, localListImage, releaseDate, workType: null, dlsiteRating: null, sampleImages: localSamples }
+    }
+  } catch (e) {
+    logError('fetchGetchuInfo:error', e)
     return { success: false, error: String(e) }
   }
 }
@@ -713,6 +881,24 @@ app.whenReady().then(() => {
     }
   )
 
+  // Move a known folder directly into gamesDir (used by scan-folder batch add)
+  ipcMain.handle(
+    'games:moveFolderToLibrary',
+    async (_, { srcFolder, gamesDir }: { srcFolder: string; gamesDir: string }) => {
+      try {
+        const destFolder = join(gamesDir, basename(srcFolder))
+        if (existsSync(destFolder)) return { success: false, error: `目標資料夾已存在：${destFolder}` }
+        mkdirSync(gamesDir, { recursive: true })
+        mainWindow?.webContents.send('progress:step', { msg: '正在移動遊戲資料...', pct: 0 })
+        await moveDir(srcFolder, destFolder)
+        mainWindow?.webContents.send('progress:step', { msg: '✓ 移動完成', pct: 100 })
+        return { success: true, newFolderPath: destFolder }
+      } catch (e) {
+        return { success: false, error: String(e) }
+      }
+    }
+  )
+
   // Move game folder to library (uses RJ ancestor if found, otherwise parent folder of exe)
   ipcMain.handle(
     'games:moveToLibrary',
@@ -940,16 +1126,41 @@ app.whenReady().then(() => {
 
   ipcMain.handle('games:scanFolder', (_, folderPath: string) => {
     try {
-      const items = readdirSync(folderPath)
-      const results: { code: string; name: string; path: string; isDir: boolean }[] = []
-      for (const name of items) {
-        const match = name.match(/([RVB]J\d{6,8})/i)
-        if (match) {
-          const code = match[1].toUpperCase()
-          const fullPath = join(folderPath, name)
-          const stat = statSync(fullPath)
-          results.push({ code, name, path: fullPath, isDir: stat.isDirectory() })
+      const skipNames = ['setup', 'install', 'uninstall', 'uachelper', 'directx', 'vcredist', 'dotnet']
+      function findExeInDir(dir: string, depth: number): string | null {
+        if (depth > 4) return null
+        let items: string[]
+        try { items = readdirSync(dir) } catch { return null }
+        for (const name of ['game.exe', 'app.exe', 'nw.exe', 'rpg_rt.exe']) {
+          if (items.map(i => i.toLowerCase()).includes(name)) return join(dir, name)
         }
+        for (const item of items) {
+          const lower = item.toLowerCase()
+          if (lower.endsWith('.exe') && !skipNames.some(s => lower.includes(s))) return join(dir, item)
+        }
+        for (const item of items) {
+          const full = join(dir, item)
+          try {
+            if (statSync(full).isDirectory()) {
+              const found = findExeInDir(full, depth + 1)
+              if (found) return found
+            }
+          } catch { /* skip */ }
+        }
+        return null
+      }
+      const entries = readdirSync(folderPath, { withFileTypes: true })
+      const results: { folderPath: string; folderName: string; detectedCode: string | null; detectedExe: string | null }[] = []
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const name = entry.name
+        const fullPath = join(folderPath, name)
+        const codeMatch = name.match(/([RVB]J\d{6,8})/i)
+        const stMatch = !codeMatch ? name.match(/\bST(\d+)\b/i) : null
+        const gcMatch = !codeMatch && !stMatch ? name.match(/\bGC(\d{5,10})\b/i) : null
+        const detectedCode = codeMatch ? codeMatch[1].toUpperCase() : stMatch ? `ST${stMatch[1]}` : gcMatch ? `GC${gcMatch[1]}` : null
+        const detectedExe = findExeInDir(fullPath, 0)
+        results.push({ folderPath: fullPath, folderName: name, detectedCode, detectedExe })
       }
       return { success: true, data: results }
     } catch (e) {
@@ -967,6 +1178,13 @@ app.whenReady().then(() => {
     } catch {
       return null
     }
+  })
+
+  ipcMain.handle('games:fetchGetchuInfo', async (_, id: string) => {
+    mainWindow?.webContents.send('progress:step', { msg: 'Getchu 資訊抓取中...', pct: 0 })
+    const result = await fetchGetchuInfo(id)
+    mainWindow?.webContents.send('progress:step', { msg: result.success ? '✓ 資訊抓取完成' : '⚠ 無法取得資訊', pct: 100 })
+    return result
   })
 
   ipcMain.handle('games:fetchSteamInfo', async (_, appId: string) => {

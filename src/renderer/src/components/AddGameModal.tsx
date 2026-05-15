@@ -48,6 +48,7 @@ export default function AddGameModal({
   const noAutoCode = !initialFile.code
   const [manualDlsite, setManualDlsite] = useState('')
   const [manualSteam, setManualSteam] = useState('')
+  const [manualGetchu, setManualGetchu] = useState('')
   const [applyingCode, setApplyingCode] = useState(false)
   const [skipMove, setSkipMove] = useState(false)
 
@@ -201,6 +202,17 @@ export default function AddGameModal({
     setApplyingCode(false)
   }
 
+  const handleApplyGetchu = async (): Promise<void> => {
+    const id = manualGetchu.trim().replace(/^GC/i, '')
+    if (!id.match(/^\d+$/)) return
+    const gcCode = `GC${id}`
+    setApplyingCode(true)
+    setFile((f) => f ? { ...f, code: gcCode, fetchingInfo: true, info: null } : f)
+    const r = await window.electronAPI.fetchGetchuInfo(id)
+    setFile((f) => f ? { ...f, fetchingInfo: false, info: r.success ? (r.data ?? null) : null } : f)
+    setApplyingCode(false)
+  }
+
   const handleApplySteam = async (): Promise<void> => {
     const appId = manualSteam.trim()
     if (!appId.match(/^\d+$/)) return
@@ -293,13 +305,29 @@ export default function AddGameModal({
                   disabled={!manualSteam.trim() || applyingCode}
                 >套用</button>
               </div>
+              <div className="manual-code-row">
+                <span className="stat-label">Getchu ID</span>
+                <input
+                  className="manual-code-input"
+                  placeholder="1355691"
+                  value={manualGetchu}
+                  onChange={(e) => setManualGetchu(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleApplyGetchu()}
+                  disabled={applyingCode}
+                />
+                <button
+                  className="manual-code-apply"
+                  onClick={handleApplyGetchu}
+                  disabled={!manualGetchu.trim() || applyingCode}
+                >套用</button>
+              </div>
             </div>
           )}
 
           {/* DLsite info */}
           {file.code && (
             file.fetchingInfo ? (
-              <div className="file-preview-info analyzing">正在從 DLsite 抓取遊戲資訊...</div>
+              <div className="file-preview-info analyzing">正在抓取遊戲資訊...</div>
             ) : file.info ? (
               <div className="info-preview">
                 {previewSrc && <img src={previewSrc} alt="" className="preview-cover" />}
@@ -320,7 +348,7 @@ export default function AddGameModal({
                 </div>
               </div>
             ) : (
-              <div className="file-preview-info warn">無法取得 DLsite 資訊（仍可新增）</div>
+              <div className="file-preview-info warn">無法取得遊戲資訊（仍可新增）</div>
             )
           )}
 

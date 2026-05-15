@@ -289,8 +289,8 @@ body {
   z-index: 1;
 }
 .detail-close:hover { color: var(--text); border-color: transparent; }
-.detail-cover { background: var(--bg3); position: relative; }
-.detail-cover img { width: 100%; display: block; }
+.detail-cover { background: var(--bg3); position: relative; max-height: 420px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.detail-cover img { width: 100%; max-height: 420px; display: block; object-fit: contain; }
 .btn-upload-cover, .btn-delete-img-cover {
   position: absolute;
   bottom: 0; left: 0; right: 0;

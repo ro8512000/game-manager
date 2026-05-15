@@ -4,7 +4,7 @@
 
 ## 概覽
 
-Windows 桌面應用程式，功能類似 Steam，用來管理 DLsite / Steam 遊戲庫。  
+Windows 桌面應用程式，功能類似 Steam，用來管理 DLsite / Steam / Getchu 遊戲庫。  
 技術棧：**Electron 39 + electron-vite + React 19 + TypeScript**
 
 ---
@@ -34,6 +34,7 @@ game-manager/
 │           ├── DuplicateModal.tsx ← 重複遊戲偵測
 │           ├── BatchFetchModal.tsx← 批量重新抓取 DLsite 資訊
 │           ├── ImportModal.tsx    ← 匯入舊版 GameManager 0.49 資料
+│           ├── ScanFolderModal.tsx← 掃描資料夾批量加入遊戲
 │           └── SettingsModal.tsx  ← 設定（遊戲儲存目錄）
 ├── data/
 │   ├── games.json             ← 遊戲資料庫
@@ -95,6 +96,7 @@ interface Game {
 |------|------|------|
 | `RJ` / `VJ` / `BJ` | DLsite | RJ01234567 |
 | `ST{appId}` | Steam | ST2074890 |
+| `GC{id}` | Getchu | GC1355691 |
 | `NF001`, `NF002`... | 無代碼（自動指派） | NF001 |
 
 ---
@@ -123,7 +125,7 @@ interface Game {
 | `windowWidth` / `windowHeight` | 視窗大小 |
 | `filterRating` | 評分篩選值 |
 | `favoritesOnly` | 我的最愛篩選 |
-| `filterSources` | 來源篩選 `['dlsite','steam','other']` |
+| `filterSources` | 來源篩選 `['dlsite','steam','getchu','other']` |
 | `ratingCollapsed` / `sourceCollapsed` | 側欄區塊收合狀態 |
 
 ---
@@ -145,7 +147,9 @@ interface Game {
 | `games:save` | 儲存 games.json（壓縮圖片路徑為相對路徑） |
 | `games:fetchInfo(code)` | DLsite 抓取（日文）：標題/社團/tag/評分/發售日/圖片（含 sam.jpg） |
 | `games:fetchSteamInfo(appId)` | Steam API 抓取：標題/開發商/tag/發售日/截圖 |
+| `games:fetchGetchuInfo(id)` | Getchu 抓取：標題/社團/發售日/封面+樣本圖（JSON-LD 解析；年齢認証用 `?gc=gc` 繞過） |
 | `games:extractCode(str)` | 從字串擷取 RJ/VJ/BJ 代碼 |
+| `games:scanFolder(folderPath)` | 掃描直接子資料夾：偵測 RJ/VJ/BJ/ST/GC 代碼 + 遞迴找 exe（深度≤4），回傳 `{folderPath, folderName, detectedCode, detectedExe}[]` |
 
 ### 遊戲操作
 | 通道 | 說明 |
@@ -172,6 +176,7 @@ interface Game {
 |------|------|
 | `games:previewMove({exePath, gamesDir})` | 預覽移動操作（無代碼時用父目錄） |
 | `games:moveToLibrary({exePath, gamesDir})` | 移動遊戲資料夾到 gamesDir（跨磁碟用 copyFileSync） |
+| `games:moveFolderToLibrary({srcFolder, gamesDir})` | 直接移動已知資料夾到 gamesDir（掃描資料夾功能用）；目標已存在時回傳 error |
 | `games:previewExtract({archivePath, gamesDir})` | 預覽解壓縮目標位置 |
 | `games:extractArchive({archivePath, gamesDir})` | 解壓縮（-mcp=932 處理日文 Shift-JIS 檔名） |
 
@@ -203,7 +208,7 @@ interface Game {
 ### 新增遊戲流程（exe）
 1. 點「+ 新增遊戲」→ 開啟檔案對話框（exe 或壓縮檔）
 2. 自動從路徑偵測 RJ/VJ/BJ 代碼
-3. 若**沒有代碼**：顯示手動輸入欄（DLsite 代碼 / Steam App ID），可套用後自動抓取資訊
+3. 若**沒有代碼**：顯示手動輸入欄（DLsite 代碼 / Steam App ID / **Getchu ID**），可套用後自動抓取資訊
 4. 若**仍無代碼**：自動指派 `NF001`、`NF002`... 遞增
 5. 遊戲**標題**：有資訊取官方標題，否則取 exe 的上層資料夾名稱
 6. 若有設定 `gamesDir`：
@@ -228,6 +233,23 @@ interface Game {
 - 抓取：名稱、開發商、genres、header_image、screenshots（最多 6 張）、發售日
 - 圖片存到 `game-images/ST{appId}/`
 - 遊戲代碼格式：`ST{appId}`
+
+### Getchu 爬蟲
+- URL：`https://www.getchu.com/item/{id}?gc=gc`（`?gc=gc` 直接繞過年齢認証）
+- 代碼格式：`GC{id}`（如 `GC1355691`）
+- **charset 處理**：使用 `fetchHTMLGetCookies`，自動從 Content-Type header 或 meta 標籤偵測 EUC-JP / Shift-JIS / UTF-8，用 `TextDecoder` 解碼
+- **資料來源**：優先解析頁面 `<script type="application/ld+json">` JSON-LD（`Product` 物件）
+  - `name` → 標題
+  - `brand.name` → 社團
+  - `image[0]` → 封面 URL（`c{id}package.jpg`）
+  - `image[1..]` → 樣本圖 URL（`c{id}sample{n}.jpg`）
+  - Fallback：`<h2 id="soft-title">`、`id="brandsite"` anchor
+- **發售日**：從商品 table 的 `発売日：` 欄位解析（`YYYY/M/D` 格式）
+- **圖片下載**：
+  - 封面用 `rc{id}package.jpg`（resized 版，同時存為 `main.jpg` 和 `sam.jpg`）
+  - 樣本圖用 JSON-LD 的 `image[1..]`（`c{id}sample{n}.jpg`）
+  - 必須帶 `Referer: https://www.getchu.com/`，否則 403；不可帶 DLsite 的 `locale=zh_TW` cookie
+- 圖片存到 `game-images/GC{id}/`（`main.jpg` + `sam.jpg` + `smp1.jpg`...）
 
 ### 匯入舊版 GameManager 0.49
 - 讀取 SQLite `Games.db`（使用 `sql.js`）
@@ -268,7 +290,7 @@ interface Game {
 ### Sidebar（左側）
 - 遊戲數量顯示
 - 我的最愛篩選
-- **來源篩選**（可收合）：DLsite 遊戲 / Steam 遊戲 / 其他遊戲
+- **來源篩選**（可收合）：DLsite 遊戲 / Steam 遊戲 / Getchu 遊戲 / 其他遊戲
 - **評分篩選**（可收合）：0-5 星以上
 - 標籤多選（AND 邏輯）+ 關鍵字過濾 + 已選置頂
 - 所有篩選狀態和收合狀態持久化
@@ -292,7 +314,8 @@ interface Game {
 ### GameDetail（右側面板）
 - 可拖拉左邊緣調整寬度（220~600px），持久化
 - **代碼可編輯**（點擊），標題可編輯（點擊）
-- **↻ 重新抓取資訊**（DLsite/Steam 遊戲），顯示進度條
+- **↻ 重新抓取資訊**（DLsite/Steam/Getchu 遊戲），顯示進度條
+- **圖片預覽**：最大高度 420px，超高圖片自動縮限（`object-fit: contain`）
 - **圖片管理**：
   - DLsite/其他：index 0=封面, 1=列表縮圖（有「縮圖」badge）, 2+=樣本圖
   - Steam：index 0=封面, 1+=樣本圖（無列表縮圖 slot）
@@ -301,18 +324,20 @@ interface Game {
   - 縮圖列末端有 + 上傳樣本圖
 - 圖片點擊開啟燈箱（鍵盤/滾輪切換、Esc 關閉）
 - Tag 編輯模式（✎ → × 移除 + 新增輸入框 + 自動補全）
-- 我的最愛切換（♡/♥）、DLsite ↗ / Steam ↗ 連結
+- 我的最愛切換（♡/♥）、DLsite ↗ / Steam ↗ / Getchu ↗ 連結（依代碼前綴顯示對應來源）
+- **↻ 重新抓取**支援 DLsite（RJ/VJ/BJ）、Steam（ST）、Getchu（GC）
+- **🖼 圖片資料夾**：有本地圖片時顯示，開啟存放圖片的資料夾
 - ⚙ 啟動檔案設定、**啟動語系**下拉選單（Locale Emulator）、備注編輯 + 儲存
 - 統計：發售日、DLsite 評分、加入時間、遊玩次數、遊玩時間、上次遊玩、磁碟大小（含 ↻）
 
 ### 右鍵選單（GameContextMenu）
-- 開啟遊戲 / DLsite 頁面 / Steam 頁面 / 開啟遊戲資料夾
+- 開啟遊戲 / DLsite 頁面 / Steam 頁面 / Getchu 頁面 / 開啟遊戲資料夾
 - 依社團搜尋 / 依代碼搜尋
 - 從列表移除 / 移除並刪除檔案
 
 ### AddGameModal（新增遊戲）
 - 自動偵測代碼，顯示 DLsite/Steam 資訊預覽
-- 無代碼時：顯示 DLsite 代碼 / Steam App ID 手動輸入欄
+- 無代碼時：顯示 DLsite 代碼 / Steam App ID / **Getchu ID** 手動輸入欄
 - exe 加入時：「不搬移資料夾」選項
 - 顯示移動/解壓縮預覽路徑，進度條
 
@@ -323,6 +348,19 @@ interface Game {
 ### BatchFetchModal（批量更新）
 - 工具列「↻ 批量更新 (N)」按鈕（列表中有 DLsite 遊戲時顯示）
 - 依序抓取，整體進度 + 單筆進度，可中途停止
+
+### ScanFolderModal（掃描資料夾）
+- 標題列「掃描資料夾」按鈕開啟
+- **流程**：選擇資料夾 → 掃描 → 預覽列表 → 勾選 → 加入
+- 掃描目標資料夾的直接子資料夾，每個子資料夾視為一款遊戲
+- 從資料夾名稱偵測 RJ/VJ/BJ（DLsite）、ST（Steam）、GC（Getchu）代碼
+- 遞迴搜尋 exe（深度 ≤ 4，跳過 setup/install 等）
+- **類型過濾**：DLsite / Steam / 其他 三個切換按鈕（含各類型數量），可組合篩選顯示
+- 「已在庫中」判斷：代碼重複或資料夾路徑已存在；預設不勾選、半透明顯示
+- 勾選介面：全選未入庫 / 全選 / 全不選（僅作用於目前可見項目）
+- **移動選項**：若已設定 `gamesDir`，顯示「移動到遊戲資料夾」勾選框，打勾後加入時先移動資料夾再抓資訊
+- 加入時：DLsite→自動抓取、Steam→Steam API、Getchu→fetchGetchuInfo、無代碼→指派 NF 代碼
+- 顯示整體進度 + 單筆進度，支援中途停止
 
 ### ImportModal（匯入舊版）
 - 標題列「匯入舊版」按鈕
@@ -357,6 +395,10 @@ interface Game {
 10. **攜帶式模式判斷**（packaged）：`getAppRoot()` 檢查 exe 旁是否有 `data/games.json`，有則用 exe 目錄，否則用 AppData；搬移後 `app.relaunch()` 重啟讓新路徑生效。
 11. **Steam 遊戲無 listImage**：`listImage` 欄位只給 DLsite/其他遊戲使用；Steam 遊戲的列表縮圖改用 `cover`（main.jpg），詳情面板圖片索引也不含 listImage slot。
 12. **Locale Emulator**：`leProcPath` 為空或 `launchLocale` 為 null 時正常啟動，不呼叫 LE；LE 不支援的語系直接在 select 選項控制，不需額外判斷。
+13. **Getchu 年齢認証**：URL 加 `?gc=gc` 即可直接繞過，伺服器回傳 `getchu_adalt_flag=getchu.com` cookie 並直接給商品頁。不需要複雜的 cookie 流程。
+14. **Getchu 圖片 403**：圖片伺服器要求 `Referer: https://www.getchu.com/`，缺少會 403；DLsite 的 `Cookie: locale=zh_TW` 送給 Getchu 也會 403，兩者不可混用。`downloadImage` 函數簽名：`(url, dest, redirectCount=0, cookie='locale=zh_TW', referer='')`，Getchu 呼叫時傳 `cookie=''、referer='https://www.getchu.com/'`。
+15. **dev 模式資料路徑**：優先讀取 `GAME_DATA_ROOT` 環境變數（`.env.local` 設定，已加入 .gitignore）；目前指向 `C:/Users/ro851/AppData/Roaming/dlsite-manager-v2`，非專案根目錄。
+16. **log 路徑**：`logDir` 只在 `logError()` 被觸發時才建立，沒有錯誤就不會有 log 目錄。dev 模式下 log 位於 `{GAME_DATA_ROOT}/logs/`。
 
 ---
 

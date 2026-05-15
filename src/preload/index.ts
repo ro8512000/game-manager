@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadGames: () => ipcRenderer.invoke('games:load'),
   saveGames: (data: unknown) => ipcRenderer.invoke('games:save', data),
   fetchInfo: (code: string) => ipcRenderer.invoke('games:fetchInfo', code),
+  fetchGetchuInfo: (id: string) => ipcRenderer.invoke('games:fetchGetchuInfo', id),
   fetchSteamInfo: (appId: string) => ipcRenderer.invoke('games:fetchSteamInfo', appId),
   extractCode: (str: string) => ipcRenderer.invoke('games:extractCode', str),
   launchGame: (args: { exePath: string; gameId: string; locale?: string | null }) => ipcRenderer.invoke('games:launch', args),
@@ -30,6 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectFile: () => ipcRenderer.invoke('games:selectFile'),
   previewMove: (args: unknown) => ipcRenderer.invoke('games:previewMove', args),
   previewExtract: (args: unknown) => ipcRenderer.invoke('games:previewExtract', args),
+  moveFolderToLibrary: (args: { srcFolder: string; gamesDir: string }) => ipcRenderer.invoke('games:moveFolderToLibrary', args),
   moveToLibrary: (args: unknown) => ipcRenderer.invoke('games:moveToLibrary', args),
   extractArchive: (args: unknown) => ipcRenderer.invoke('games:extractArchive', args),
 

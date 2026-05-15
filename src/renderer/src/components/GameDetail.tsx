@@ -87,13 +87,17 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
   }
 
   const handleRefetchInfo = async (): Promise<void> => {
-    const canFetch = /^[RVB]J\d{6,8}$/i.test(game.id) || game.id.startsWith('ST')
-    if (!canFetch || refetching) return
+    const isRJ = /^[RVB]J\d{6,8}$/i.test(game.id)
+    const isST = game.id.startsWith('ST')
+    const isGC = game.id.startsWith('GC')
+    if (!isRJ && !isST && !isGC || refetching) return
     setRefetching(true)
     setRefetchProgress(null)
-    const result = game.id.startsWith('ST')
+    const result = isST
       ? await window.electronAPI.fetchSteamInfo(game.id.slice(2))
-      : await window.electronAPI.fetchInfo(game.id)
+      : isGC
+        ? await window.electronAPI.fetchGetchuInfo(game.id.slice(2))
+        : await window.electronAPI.fetchInfo(game.id)
     if (result.success && result.data) {
       const d = result.data
       onUpdate({
@@ -148,6 +152,14 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
 
   const handleOpenFolder = (): void => {
     if (game.path) window.electronAPI.openFolder(game.path)
+  }
+
+  const handleOpenImagesFolder = (): void => {
+    const imgPath = game.cover || game.listImage || game.sampleImages?.[0]
+    if (imgPath) {
+      const folder = imgPath.replace(/[/\\][^/\\]+$/, '')
+      window.electronAPI.openFolder(folder)
+    }
   }
 
   const handleSetExe = async (): Promise<void> => {
@@ -327,7 +339,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
           ) : (
             <span className="detail-id editable" onClick={() => setEditingId(true)} title="點擊編輯代碼">{game.id}</span>
           )}
-          {(/^[RVB]J\d{6,8}$/i.test(game.id) || game.id.startsWith('ST')) && (
+          {(/^[RVB]J\d{6,8}$/i.test(game.id) || game.id.startsWith('ST') || game.id.startsWith('GC')) && (
             <button
               className="btn-refetch"
               onClick={handleRefetchInfo}
@@ -349,6 +361,9 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
           )}
           {game.id.startsWith('ST') && (
             <button className="btn-dlsite" onClick={() => window.electronAPI.openExternal(`https://store.steampowered.com/app/${game.id.slice(2)}/`)}>Steam ↗</button>
+          )}
+          {game.id.startsWith('GC') && (
+            <button className="btn-dlsite" onClick={() => window.electronAPI.openExternal(`https://www.getchu.com/item/${game.id.slice(2)}`)}>Getchu ↗</button>
           )}
         </div>
         {refetching && refetchProgress && (
@@ -449,6 +464,9 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
           )}
           {game.path && (
             <button className="btn-folder" onClick={handleOpenFolder}>📁 開啟資料夾</button>
+          )}
+          {(game.cover || game.listImage || game.sampleImages?.[0]) && (
+            <button className="btn-folder" onClick={handleOpenImagesFolder} title="開啟圖片資料夾">🖼 圖片資料夾</button>
           )}
           <button className="btn-set-exe" onClick={handleSetExe} title="選擇此遊戲的啟動exe">
             ⚙ 啟動檔案
