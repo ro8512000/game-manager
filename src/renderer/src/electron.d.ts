@@ -51,6 +51,7 @@ interface ElectronAPI {
   loadGames: () => Promise<GamesData>
   saveGames: (data: GamesData) => Promise<boolean>
   fetchInfo: (code: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
+  suggestFetchDlsite: (term: string) => Promise<{ success: boolean; id?: string; data?: Record<string, unknown>; error?: string }>
   fetchGetchuInfo: (id: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
   fetchSteamInfo: (appId: string) => Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }>
   extractCode: (str: string) => Promise<string | null>
@@ -64,6 +65,7 @@ interface ElectronAPI {
   uploadImage: (gameId: string, role: 'cover' | 'sample' | 'listImage') => Promise<string | null>
   findExe: (folderPath: string) => Promise<string | null>
   openExternal: (url: string) => Promise<void>
+  openGetchuSearch: (keyword: string) => Promise<void>
   deleteFolder: (folderPath: string) => Promise<boolean>
   deleteFile: (filePath: string) => Promise<boolean>
   getFolderSize: (folderPath: string) => Promise<number | null>

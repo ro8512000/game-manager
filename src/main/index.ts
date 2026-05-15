@@ -20,6 +20,7 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import iconv from 'iconv-lite'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const initSqlJs = require('sql.js') as (opts: { wasmBinary: Buffer }) => Promise<{ Database: new (data: Buffer) => { exec: (sql: string) => { columns: string[]; values: unknown[][] }[] } }>
 
@@ -725,6 +726,32 @@ app.whenReady().then(() => {
     return result
   })
 
+  ipcMain.handle('games:suggestFetchDlsite', async (_, term: string) => {
+    try {
+      const encoded = encodeURIComponent(term)
+      const ts = Date.now()
+      const url = `https://www.dlsite.com/suggest/?callback=cb&term=${encoded}&site=adult-jp&time=${ts}&touch=0&_=${ts}`
+      const text = await fetchHTML(url)
+      // JSONP: parse regardless of callback name — find first ( ... )
+      const start = text.indexOf('(')
+      const end = text.lastIndexOf(')')
+      if (start === -1 || end === -1 || end <= start) return { success: false, error: '沒有查詢結果' }
+      const data = JSON.parse(text.slice(start + 1, end))
+      // Response: { work: [{workno, work_name, maker_name, ...}] }
+      const works: Record<string, string>[] = Array.isArray(data) ? data : (data.work ?? [])
+      if (!works.length) return { success: false, error: '沒有查詢結果' }
+      const first = works[0]
+      const id: string = String(first.workno ?? first.id ?? '')
+      if (!id || !/^[RVB]J\d{6,8}$/i.test(id)) return { success: false, error: '沒有查詢結果' }
+      mainWindow?.webContents.send('progress:step', { msg: `找到 ${id}，抓取資訊中...`, pct: 30 })
+      const result = await fetchDLsiteInfo(id)
+      mainWindow?.webContents.send('progress:step', { msg: result.success ? '✓ 完成' : '⚠ 抓取失敗', pct: 100 })
+      return { ...result, id: id.toUpperCase() }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+
   ipcMain.handle('games:extractCode', (_, str: string) => {
     const match = str.match(/([RVB]J\d{6,8})/i)
     return match ? match[1].toUpperCase() : null
@@ -809,6 +836,17 @@ app.whenReady().then(() => {
 
   ipcMain.handle('shell:openExternal', (_, url: string) => {
     shell.openExternal(url)
+  })
+
+  ipcMain.handle('shell:openGetchuSearch', (_, keyword: string) => {
+    // Getchu uses EUC-JP — encode keyword to EUC-JP bytes then percent-encode
+    const buf: Buffer = iconv.encode(keyword, 'EUC-JP')
+    const encoded = Array.from(buf)
+      .map((b) => `%${b.toString(16).toUpperCase().padStart(2, '0')}`)
+      .join('')
+    shell.openExternal(
+      `https://www.getchu.com/php/search.phtml?genre=all&search_keyword=${encoded}&check_key_dtl=1&submit=`
+    )
   })
 
   ipcMain.handle('games:selectFolder', async () => {

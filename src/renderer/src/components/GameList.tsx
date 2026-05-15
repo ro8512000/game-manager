@@ -24,35 +24,43 @@ interface Props {
 function ListThumb({ game }: { game: Game }): React.JSX.Element {
   const [src, setSrc] = useState<string | null>(null)
   const isSteam = game.id.startsWith('ST')
+
   useEffect(() => {
     setSrc(null)
-    if (isSteam) {
-      // Steam: use cover image directly
-      if (game.cover) {
-        window.electronAPI.getImageData(game.cover).then((data) => {
+    let cancelled = false
+
+    const load = async (): Promise<void> => {
+      if (isSteam) {
+        if (game.cover) {
+          const data = await window.electronAPI.getImageData(game.cover)
+          if (cancelled) return
           if (data) { setSrc(data); return }
-          if (game.coverUrl) setSrc(game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl)
-        })
-      } else if (game.coverUrl) {
-        setSrc(game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl)
+        }
+        if (game.coverUrl && !cancelled)
+          setSrc(game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl)
+        return
       }
-      return
-    }
-    // DLsite/other: listImage → _img_sam fallback
-    if (game.listImage) {
-      window.electronAPI.getImageData(game.listImage).then((data) => {
+      // DLsite/other/Getchu: listImage → cover → remote
+      if (game.listImage) {
+        const data = await window.electronAPI.getImageData(game.listImage)
+        if (cancelled) return
         if (data) { setSrc(data); return }
-        setFallback()
-      })
-    } else {
-      setFallback()
+      }
+      if (game.cover) {
+        const data = await window.electronAPI.getImageData(game.cover)
+        if (cancelled) return
+        if (data) { setSrc(data); return }
+      }
+      if (game.coverUrl && !cancelled) {
+        const url = game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl
+        setSrc(url.replace('_img_main', '_img_sam'))
+      }
     }
-    function setFallback() {
-      if (!game.coverUrl) return
-      const url = game.coverUrl.replace('_img_main', '_img_sam')
-      setSrc(url.startsWith('//') ? `https:${url}` : url)
-    }
+
+    load()
+    return () => { cancelled = true }
   }, [game.listImage, game.cover, game.coverUrl, game.id, isSteam])
+
   if (!src) return <div className="list-thumb-empty" />
   return <img src={src} alt="" className="list-thumb-img" onError={() => setSrc(null)} />
 }
@@ -120,7 +128,7 @@ export default function GameList({
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [hoverPreview, setHoverPreview] = useState<{
     game: Game; x: number; y: number
-    sources: (string | null)[]  // null = loading
+    sources: (string | null)[]
     currentIdx: number
   } | null>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -129,7 +137,6 @@ export default function GameList({
   const hoverPreviewRef = useRef(hoverPreview)
   useEffect(() => { hoverPreviewRef.current = hoverPreview }, [hoverPreview])
 
-  // Callback ref: attach non-passive wheel listener directly to preview div
   const previewRef = useCallback((node: HTMLDivElement | null) => {
     if (!node) return
     const handler = (e: WheelEvent): void => {
@@ -146,6 +153,7 @@ export default function GameList({
     }
     node.addEventListener('wheel', handler, { passive: false })
   }, [])
+
   const [colWidths, setColWidths] = useState<Record<string, number>>(initialColWidths)
   const [sortKey, setSortKey] = useState<string | null>(initialSortKey)
   const [sortDir, setSortDir] = useState<SortDir>(initialSortDir)
@@ -176,7 +184,6 @@ export default function GameList({
         ? (game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl)
         : null
 
-      // Load first image
       let firstSrc: string | null = null
       if (localPaths[0]) firstSrc = await window.electronAPI.getImageData(localPaths[0])
       if (!firstSrc && remoteFallback) firstSrc = remoteFallback
@@ -187,7 +194,6 @@ export default function GameList({
       sources[0] = firstSrc
       setHoverPreview({ game, x, y, sources, currentIdx: 0 })
 
-      // Preload remaining images in background
       for (let i = 1; i < localPaths.length; i++) {
         const idx = i
         window.electronAPI.getImageData(localPaths[idx]).then(data => {
@@ -219,7 +225,6 @@ export default function GameList({
   }
 
   const handleRowWheel = (game: Game, e: React.WheelEvent): void => {
-    // Wheel on the row also cycles images (while mouse is on the row)
     if (!hoverPreview || hoverPreview.game.uuid !== game.uuid) return
     const total = hoverPreview.sources.length
     if (total <= 1) return
@@ -257,12 +262,8 @@ export default function GameList({
     if (sortKey !== key) {
       setSortKey(key); setSortDir('asc')
       window.electronAPI.saveUiSettings({ listSortKey: key, listSortDir: 'asc' })
-      // Auto-apply month grouping for date fields
-      if (key in DATE_GROUP_MAP) {
-        onGroupByChange?.(DATE_GROUP_MAP[key])
-      } else {
-        onGroupByChange?.('')
-      }
+      if (key in DATE_GROUP_MAP) onGroupByChange?.(DATE_GROUP_MAP[key])
+      else onGroupByChange?.('')
     } else if (sortDir === 'asc') {
       setSortDir('desc')
       window.electronAPI.saveUiSettings({ listSortDir: 'desc' })
@@ -273,7 +274,6 @@ export default function GameList({
     }
   }
 
-  // Groups with no data always sort to the end regardless of direction
   const UNKNOWN_GROUPS = new Set(['未知', '未知日期', '未知年份', '未知月份', '從未遊玩'])
   const compareGroups = (ga: string, gb: string, dir: 'asc' | 'desc'): number => {
     const aUnknown = UNKNOWN_GROUPS.has(ga)
@@ -288,11 +288,9 @@ export default function GameList({
   const sortedGames = useMemo(() => {
     let list = [...games]
     const dir = sortDir ?? 'asc'
-    // Sort by group key first (unknown groups always at end)
     if (groupBy) {
       list.sort((a, b) => compareGroups(getGroupValue(a, groupBy), getGroupValue(b, groupBy), dir))
     }
-    // Then apply column sort within groups
     if (sortKey && sortDir) {
       list.sort((a, b) => {
         if (groupBy) {
@@ -303,7 +301,6 @@ export default function GameList({
         }
         const va = getCellValue(a, sortKey)
         const vb = getCellValue(b, sortKey)
-        // Null/empty values always at end regardless of direction
         if (va == null && vb == null) return 0
         if (va == null) return 1
         if (vb == null) return -1
@@ -315,6 +312,21 @@ export default function GameList({
     }
     return list
   }, [games, sortKey, sortDir, groupBy])
+
+  // 鍵盤上下箭頭切換選取遊戲
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+      if (!selected) return
+      const idx = sortedGames.findIndex((g) => g.uuid === selected.uuid)
+      if (idx === -1) return
+      e.preventDefault()
+      const nextIdx = e.key === 'ArrowUp' ? idx - 1 : idx + 1
+      if (nextIdx >= 0 && nextIdx < sortedGames.length) onSelect(sortedGames[nextIdx])
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [selected, sortedGames, onSelect])
 
   if (games.length === 0) {
     return (
@@ -335,7 +347,6 @@ export default function GameList({
           style={{ gridTemplateColumns: gridTemplate }}
           onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenuPos({ x: e.clientX, y: e.clientY }) }}
         >
-          {/* Fixed thumbnail header */}
           <div className="list-header-cell list-header-thumb" />
           {visibleColumns.map((key, i) => {
             const isSort = sortKey === key
@@ -350,7 +361,7 @@ export default function GameList({
                 onDrop={(e) => { e.preventDefault(); if (dragIdx !== null && dragIdx !== i) onMoveColumn(dragIdx, i); setDragIdx(null); setDragOverIdx(null) }}
                 onDragEnd={() => { setDragIdx(null); setDragOverIdx(null) }}
                 onClick={() => handleSortClick(key)}
-                title={`點擊排序，拖曳調整順序`}
+                title="點擊排序，拖曳調整順序"
               >
                 <span className="header-label">{label}</span>
                 <span className={`sort-icon ${isSort ? 'active' : ''}`}>
@@ -376,7 +387,7 @@ export default function GameList({
             <React.Fragment key={game.uuid}>
               {showHeader && (
                 <div className="list-group-header" style={{ gridColumn: `1 / ${visibleColumns.length + 1}` }}>
-                  {groupLabel}  <span className="list-group-count">({groupCount})</span>
+                  {groupLabel} <span className="list-group-count">({groupCount})</span>
                 </div>
               )}
               <div
@@ -388,23 +399,22 @@ export default function GameList({
                 onMouseEnter={(e) => handleRowEnter(game, e)}
                 onMouseLeave={handleRowLeave}
                 onWheel={(e) => handleRowWheel(game, e)}
-                >
-                  {/* Fixed thumbnail cell */}
-                  <span className="col-cell col-thumb">
-                    <ListThumb game={game} />
+              >
+                <span className="col-cell col-thumb">
+                  <ListThumb game={game} />
+                </span>
+                {visibleColumns.map((key) => (
+                  <span key={key} className={`col-cell col-${key}`}>
+                    {key === 'title' && game.isFavorite ? `♥ ${renderCell(game, key)}` : renderCell(game, key)}
                   </span>
-                  {visibleColumns.map((key) => (
-                    <span key={key} className={`col-cell col-${key}`}>
-                      {key === 'title' && game.isFavorite ? `♥ ${renderCell(game, key)}` : renderCell(game, key)}
-                    </span>
-                  ))}
-                </div>
+                ))}
+              </div>
             </React.Fragment>
           )
         })}
       </div>
 
-      {/* Image hover preview */}
+      {/* ── Image hover preview ── */}
       {hoverPreview && hoverPreview.sources.some(Boolean) && (
         <div
           ref={previewRef}
@@ -429,7 +439,7 @@ export default function GameList({
         </div>
       )}
 
-      {/* Column visibility menu */}
+      {/* ── Column visibility menu ── */}
       {menuPos && (
         <div
           ref={menuRef}

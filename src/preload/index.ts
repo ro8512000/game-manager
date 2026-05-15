@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadGames: () => ipcRenderer.invoke('games:load'),
   saveGames: (data: unknown) => ipcRenderer.invoke('games:save', data),
   fetchInfo: (code: string) => ipcRenderer.invoke('games:fetchInfo', code),
+  suggestFetchDlsite: (term: string) => ipcRenderer.invoke('games:suggestFetchDlsite', term),
   fetchGetchuInfo: (id: string) => ipcRenderer.invoke('games:fetchGetchuInfo', id),
   fetchSteamInfo: (appId: string) => ipcRenderer.invoke('games:fetchSteamInfo', appId),
   extractCode: (str: string) => ipcRenderer.invoke('games:extractCode', str),
@@ -26,6 +27,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   uploadImage: (gameId: string, role: 'cover' | 'sample' | 'listImage') => ipcRenderer.invoke('games:uploadImage', { gameId, role }),
   findExe: (folderPath: string) => ipcRenderer.invoke('games:findExe', folderPath),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  openGetchuSearch: (keyword: string) => ipcRenderer.invoke('shell:openGetchuSearch', keyword),
 
   // File operations
   selectFile: () => ipcRenderer.invoke('games:selectFile'),

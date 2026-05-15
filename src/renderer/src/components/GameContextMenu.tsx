@@ -13,6 +13,10 @@ interface Props {
   onSearchCode: () => void
   onRemove: () => void
   onRemoveWithFiles: () => void
+  onSearchDLsiteWeb?: () => void
+  onTryDLsiteFetch?: () => void
+  onSearchSteamWeb?: () => void
+  onSearchGetchuWeb?: () => void
 }
 
 function getDLsiteUrl(id: string): string {
@@ -26,11 +30,12 @@ export { getDLsiteUrl }
 export default function GameContextMenu({
   game, x, y, onClose,
   onLaunch, onOpenDLsite, onOpenFolder,
-  onSearchCircle, onSearchCode, onRemove, onRemoveWithFiles
+  onSearchCircle, onSearchCode, onRemove, onRemoveWithFiles,
+  onSearchDLsiteWeb, onTryDLsiteFetch, onSearchSteamWeb, onSearchGetchuWeb
 }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
-  const safeX = Math.min(x, window.innerWidth - 250)
-  const safeY = Math.min(y, window.innerHeight - 280)
+  const safeX = Math.min(x, window.innerWidth - 260)
+  const safeY = Math.min(y, window.innerHeight - 320)
 
   useEffect(() => {
     const onMd = (e: MouseEvent): void => {
@@ -46,6 +51,7 @@ export default function GameContextMenu({
   const isRJ = /^[RVB]J\d{6,8}$/i.test(game.id)
   const isST = game.id.startsWith('ST')
   const isGC = game.id.startsWith('GC')
+  const isOther = !isRJ && !isST && !isGC
 
   return (
     <div ref={ref} className="ctx-menu" style={{ top: safeY, left: safeX }}>
@@ -69,6 +75,35 @@ export default function GameContextMenu({
         <button className="ctx-item" onClick={() => act(onOpenFolder)}>📁 開啟遊戲資料夾</button>
       )}
       {(game.exe || game.path || isRJ || isST || isGC) && <div className="ctx-sep" />}
+
+      {/* 推薦搜尋 — 僅限其他遊戲類型 */}
+      {isOther && (
+        <>
+          <div className="ctx-section-label">推薦搜尋</div>
+          {onSearchDLsiteWeb && (
+            <button className="ctx-item" onClick={() => act(onSearchDLsiteWeb)}>
+              🔎 DLsite 搜尋（廣域）
+            </button>
+          )}
+          {onTryDLsiteFetch && (
+            <button className="ctx-item" onClick={() => act(onTryDLsiteFetch)}>
+              ⬇ 嘗試更新 DLsite 資訊
+            </button>
+          )}
+          {onSearchSteamWeb && (
+            <button className="ctx-item" onClick={() => act(onSearchSteamWeb)}>
+              🔎 Steam 搜尋
+            </button>
+          )}
+          {onSearchGetchuWeb && (
+            <button className="ctx-item" onClick={() => act(onSearchGetchuWeb)}>
+              🔎 Getchu 搜尋
+            </button>
+          )}
+          <div className="ctx-sep" />
+        </>
+      )}
+
       {game.circle && (
         <button className="ctx-item" onClick={() => act(onSearchCircle)}>
           🔍 依照「{game.circle}」搜尋遊戲

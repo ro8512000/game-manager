@@ -1,6 +1,10 @@
 # Game Manager — 專案說明文件
 
-> **給 AI 的規則**：每次對程式碼進行功能修改後，必須同步更新本文件（PROJECT.md），將新增、變更、或移除的功能、IPC 通道、資料欄位、元件行為、注意事項等內容補充進對應章節，保持文件與程式碼一致。
+> ## ⚠ 給 AI 助理的開發規則（必讀）
+>
+> 1. **每次完成功能實作或 bug fix 後，必須立即更新本文件**，不等使用者提醒、不等到最後才補。
+> 2. 更新範圍：新增/變更/移除的功能說明、IPC 通道、資料欄位、元件行為、已知注意事項、指令等。
+> 3. 保持文件與程式碼一致，讓下一位 AI 讀取此文件即可理解目前的專案狀態。
 
 ## 概覽
 
@@ -127,6 +131,7 @@ interface Game {
 | `favoritesOnly` | 我的最愛篩選 |
 | `filterSources` | 來源篩選 `['dlsite','steam','getchu','other']` |
 | `ratingCollapsed` / `sourceCollapsed` | 側欄區塊收合狀態 |
+| `pageSize` | 分頁大小（`50`/`100`/`250`/`500`/`1000`/`null`=全部顯示） |
 
 ---
 
@@ -148,6 +153,7 @@ interface Game {
 | `games:fetchInfo(code)` | DLsite 抓取（日文）：標題/社團/tag/評分/發售日/圖片（含 sam.jpg） |
 | `games:fetchSteamInfo(appId)` | Steam API 抓取：標題/開發商/tag/發售日/截圖 |
 | `games:fetchGetchuInfo(id)` | Getchu 抓取：標題/社團/發售日/封面+樣本圖（JSON-LD 解析；年齢認証用 `?gc=gc` 繞過） |
+| `games:suggestFetchDlsite(term)` | 用遊戲名稱查詢 DLsite suggest API → 取第一個 RJ/VJ/BJ 代碼 → 自動抓取並回傳 DLsite 資訊；找不到時回傳 `{success:false, error:'沒有查詢結果'}` |
 | `games:extractCode(str)` | 從字串擷取 RJ/VJ/BJ 代碼 |
 | `games:scanFolder(folderPath)` | 掃描直接子資料夾：偵測 RJ/VJ/BJ/ST/GC 代碼 + 遞迴找 exe（深度≤4），回傳 `{folderPath, folderName, detectedCode, detectedExe}[]` |
 
@@ -198,6 +204,7 @@ interface Game {
 | 通道 | 說明 |
 |------|------|
 | `shell:openExternal(url)` | 在系統瀏覽器開啟 URL |
+| `shell:openGetchuSearch(keyword)` | 用 iconv-lite 將關鍵字轉 EUC-JP percent-encode 後，開啟 Getchu 搜尋頁（直接 encodeURIComponent 會亂碼） |
 | `game:session-end` | 遊戲關閉事件（含遊玩秒數） |
 | `progress:step` | 進度更新 `{msg, pct}` |
 
@@ -274,6 +281,13 @@ interface Game {
 - 設定頁顯示當前模式（攜帶式/AppData badge）和實際路徑
 - 搬移按鈕：複製 `data/` 和 `game-images/` 到目標位置 → 刪除來源 → `app.relaunch()` 重啟，全程顯示進度條
 
+### 分頁
+- 底部分頁欄：選擇每頁顯示數量（50 / 100 / 250 / 500 / 1000 / 全部）
+- 全部（null）= 不分頁，顯示所有篩選結果
+- 分頁大小持久化至 `ui-settings.json`（key: `pageSize`）
+- 切換篩選條件或分頁大小時自動重置到第 1 頁
+- 磁磚視圖和列表視圖共用同一分頁狀態
+
 ### 遊玩時間計算
 - `spawn` 啟動遊戲（detached，保留 close 事件）
 - 關閉時發送 `game:session-end`，renderer 累加 `playTime`
@@ -301,13 +315,14 @@ interface Game {
 - 排序設定持久化
 
 ### GameList（列表視圖）
-- **列表縮圖**：每行最左固定 32px 縮圖欄；DLsite 遊戲顯示 `sam.jpg` 或遠端 `_img_sam` fallback，Steam 遊戲改用 `main.jpg`（cover）
+- **列表縮圖**：每行最左固定 32px 縮圖欄；fallback 順序：listImage → cover（本地）→ 遠端 `_img_sam` URL
 - 動態欄位（右鍵標題列選擇，含大小、遊玩時間等欄位）
 - 欄位可拖拉調整寬度、拖拉換順序
 - 點擊欄位標題排序（無→▲→▼→無）；空值永遠排最後
 - **分組顯示**：Toolbar 分組下拉選單（社團/評分/作品形式/來源/發售年份/各月份選項）
 - **日期欄位自動分組**：點擊加入時間/發售日/上次遊玩排序時，自動套用對應月份分組
 - 滑鼠停留 300ms 顯示封面圖預覽；移到預覽圖上可滾輪切換圖片（背景列表不捲動）
+- **鍵盤導覽**：選取遊戲後按 ↑↓ 切換上/下一款（在當前分頁內）
 - 雙擊啟動遊戲
 - 所有欄位/排序/分組/寬度設定持久化
 
@@ -334,6 +349,11 @@ interface Game {
 - 開啟遊戲 / DLsite 頁面 / Steam 頁面 / Getchu 頁面 / 開啟遊戲資料夾
 - 依社團搜尋 / 依代碼搜尋
 - 從列表移除 / 移除並刪除檔案
+- **推薦搜尋**（僅限「其他遊戲」類型，即非 RJ/ST/GC 的遊戲）：
+  - 🔎 DLsite 搜尋（廣域）— 開啟 DLsite 全品類搜尋頁
+  - ⬇ 嘗試更新 DLsite 資訊 — 呼叫 `games:suggestFetchDlsite`，成功後自動更新遊戲資料（含 ID 變更為 RJ 代碼）；結果顯示 toast 通知
+  - 🔎 Steam 搜尋 — 開啟 Steam 搜尋頁
+  - 🔎 Getchu 搜尋 — 呼叫 `shell:openGetchuSearch`（EUC-JP 編碼）
 
 ### AddGameModal（新增遊戲）
 - 自動偵測代碼，顯示 DLsite/Steam 資訊預覽
@@ -397,15 +417,19 @@ interface Game {
 12. **Locale Emulator**：`leProcPath` 為空或 `launchLocale` 為 null 時正常啟動，不呼叫 LE；LE 不支援的語系直接在 select 選項控制，不需額外判斷。
 13. **Getchu 年齢認証**：URL 加 `?gc=gc` 即可直接繞過，伺服器回傳 `getchu_adalt_flag=getchu.com` cookie 並直接給商品頁。不需要複雜的 cookie 流程。
 14. **Getchu 圖片 403**：圖片伺服器要求 `Referer: https://www.getchu.com/`，缺少會 403；DLsite 的 `Cookie: locale=zh_TW` 送給 Getchu 也會 403，兩者不可混用。`downloadImage` 函數簽名：`(url, dest, redirectCount=0, cookie='locale=zh_TW', referer='')`，Getchu 呼叫時傳 `cookie=''、referer='https://www.getchu.com/'`。
-15. **dev 模式資料路徑**：優先讀取 `GAME_DATA_ROOT` 環境變數（`.env.local` 設定，已加入 .gitignore）；目前指向 `C:/Users/ro851/AppData/Roaming/dlsite-manager-v2`，非專案根目錄。
+15. **dev 模式資料路徑**：優先讀取 `GAME_DATA_ROOT` 環境變數（`.env*.local` 設定，已加入 .gitignore）；`.env.local` 指向 AppData（測試環境），`.env.prod.local` 指向 `G:/GameManager`（正式環境），用 `npm run dev:prod` 切換。
 16. **log 路徑**：`logDir` 只在 `logError()` 被觸發時才建立，沒有錯誤就不會有 log 目錄。dev 模式下 log 位於 `{GAME_DATA_ROOT}/logs/`。
+17. **DLsite suggest API**：回傳格式為 `cb({"work":[{"workno":"RJ...","work_name":"...","maker_name":"..."}]})` 的 JSONP；解析時不依賴 callback 名稱，直接找第一個 `(` 和最後一個 `)` 取 JSON 內容。
+18. **Getchu 搜尋 URL 編碼**：Getchu 服務器按 EUC-JP 解讀 query string，UTF-8 的 `encodeURIComponent` 會造成亂碼；須用 `iconv-lite` 將關鍵字轉 EUC-JP bytes 再逐 byte percent-encode。
+19. **GameCard React.memo**：GameCard 包了 `React.memo`，避免父元件重繪時不必要的卡片重新渲染。
 
 ---
 
 ## 指令
 
 ```bash
-npm run dev          # 開發模式（Electron 視窗）
+npm run dev          # 開發模式，讀取 AppData 資料（.env.local）
+npm run dev:prod     # 開發模式，讀取 G:\GameManager 資料（.env.prod.local）
 npm run typecheck    # TypeScript 型別檢查
-npm run build:win    # 建置 Windows 安裝檔
+npm run build:win    # 建置 Windows zip（不產出安裝檔）
 ```

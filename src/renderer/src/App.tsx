@@ -99,6 +99,8 @@ export default function App(): React.JSX.Element {
   const [filterSources, setFilterSources] = useState<('dlsite' | 'steam' | 'getchu' | 'other')[]>(['dlsite', 'steam', 'getchu', 'other'])
   const [ratingCollapsed, setRatingCollapsed] = useState(false)
   const [sourceCollapsed, setSourceCollapsed] = useState(false)
+  const [pageSize, setPageSize] = useState<number | null>(100)
+  const [currentPage, setCurrentPage] = useState(1)
 
   const getGameSource = (id: string): 'dlsite' | 'steam' | 'getchu' | 'other' => {
     if (/^[RVB]J\d{6,8}$/i.test(id)) return 'dlsite'
@@ -150,6 +152,12 @@ export default function App(): React.JSX.Element {
   const [listGroupBy, setListGroupBy] = useState<string>('')
   const [ctxMenu, setCtxMenu] = useState<{ game: Game; x: number; y: number } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ game: Game; withFiles: boolean } | null>(null)
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 3000)
+    return () => clearTimeout(t)
+  }, [toast])
   const [detailWidth, setDetailWidth] = useState(300)
   const detailWidthRef = useRef(300)
   useEffect(() => { detailWidthRef.current = detailWidth }, [detailWidth])
@@ -181,6 +189,7 @@ export default function App(): React.JSX.Element {
       if (ui.gridSortKey) setGridSortKey(ui.gridSortKey as string)
       if (ui.gridSortDir) setGridSortDir(ui.gridSortDir as 'asc' | 'desc')
       if (ui.listGroupBy) setListGroupBy(ui.listGroupBy as string)
+      if ('pageSize' in ui) setPageSize(ui.pageSize as number | null)
       setLoading(false)
     })
   }, [])
@@ -227,6 +236,32 @@ export default function App(): React.JSX.Element {
     },
     [data, save, selected]
   )
+
+  const handleSuggestDlsite = useCallback(async (game: Game): Promise<void> => {
+    setCtxMenu(null)
+    setToast({ msg: `搜尋中：${game.title}...`, ok: true })
+    const result = await window.electronAPI.suggestFetchDlsite(game.title)
+    if (!result.success || !result.data) {
+      setToast({ msg: result.error || '沒有查詢結果', ok: false })
+      return
+    }
+    const d = result.data
+    await updateGame({
+      ...game,
+      id: result.id || game.id,
+      title: (d.title as string) || game.title,
+      circle: (d.circle as string) || game.circle,
+      tags: (d.tags as string[]) || game.tags,
+      cover: (d.localCover as string) || game.cover,
+      listImage: (d.localListImage as string) || game.listImage,
+      coverUrl: (d.coverUrl as string) || game.coverUrl,
+      sampleImages: (d.sampleImages as string[]) || game.sampleImages,
+      releaseDate: (d.releaseDate as string) || game.releaseDate,
+      workType: (d.workType as string) || game.workType,
+      dlsiteRating: (d.dlsiteRating as string) || game.dlsiteRating,
+    })
+    setToast({ msg: `✓ 已更新為 ${result.id}: ${(d.title as string) || game.title}`, ok: true })
+  }, [updateGame])
 
   const handleSaveSettings = useCallback(async (newSettings: Settings) => {
     setSettings(newSettings)
@@ -290,6 +325,20 @@ export default function App(): React.JSX.Element {
     : filtered
 
   const allTags = Array.from(new Set(data.games.flatMap((g) => g.tags))).sort()
+
+  // 換頁：篩選結果數量或 pageSize 改變時重置到第 1 頁
+  const filteredLen = filtered.length
+  useEffect(() => { setCurrentPage(1) }, [filteredLen, pageSize])
+
+  const totalPages = pageSize ? Math.max(1, Math.ceil(filtered.length / pageSize)) : 1
+  const paginatedSortedFiltered = pageSize ? sortedFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize) : sortedFiltered
+  const paginatedFiltered = pageSize ? filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize) : filtered
+
+  const handlePageSizeChange = (val: number | null): void => {
+    setPageSize(val)
+    setCurrentPage(1)
+    window.electronAPI.saveUiSettings({ pageSize: val })
+  }
 
   if (loading) {
     return <div className="loading">載入中...</div>
@@ -394,14 +443,14 @@ export default function App(): React.JSX.Element {
 
           {viewMode === 'grid' ? (
             <GameGrid
-              games={sortedFiltered}
+              games={paginatedSortedFiltered}
               selected={selected}
               onSelect={setSelected}
               onContextMenu={handleContextMenu}
             />
           ) : (
             <GameList
-              games={filtered}
+              games={paginatedFiltered}
               selected={selected}
               onSelect={setSelected}
               visibleColumns={visibleColumns}
@@ -416,6 +465,30 @@ export default function App(): React.JSX.Element {
               onGroupByChange={handleListGroupByChange}
             />
           )}
+
+          {/* 分頁欄 */}
+          <div className="pagination-bar">
+            <select
+              className="page-size-select"
+              value={pageSize ?? 0}
+              onChange={(e) => { const v = parseInt(e.target.value); handlePageSizeChange(v === 0 ? null : v) }}
+            >
+              {[50, 100, 250, 500, 1000].map((n) => (
+                <option key={n} value={n}>{n} 款/頁</option>
+              ))}
+              <option value={0}>全部</option>
+            </select>
+            {pageSize && totalPages > 1 && (
+              <>
+                <button className="page-btn" disabled={currentPage === 1} onClick={() => setCurrentPage(1)}>«</button>
+                <button className="page-btn" disabled={currentPage === 1} onClick={() => setCurrentPage((p) => p - 1)}>‹</button>
+                <span className="page-info">{currentPage} / {totalPages}</span>
+                <button className="page-btn" disabled={currentPage === totalPages} onClick={() => setCurrentPage((p) => p + 1)}>›</button>
+                <button className="page-btn" disabled={currentPage === totalPages} onClick={() => setCurrentPage(totalPages)}>»</button>
+              </>
+            )}
+            <span className="pagination-total">{filtered.length} 款遊戲</span>
+          </div>
         </div>
 
         {selected && (
@@ -509,6 +582,13 @@ export default function App(): React.JSX.Element {
           onSearchCode={() => { setSearch(ctxMenu.game.id); setFilterTags([]) }}
           onRemove={() => setDeleteTarget({ game: ctxMenu.game, withFiles: false })}
           onRemoveWithFiles={() => setDeleteTarget({ game: ctxMenu.game, withFiles: true })}
+          onSearchDLsiteWeb={() => {
+            const kw = ctxMenu.game.title.trim().split(/\s+/).join('+')
+            window.electronAPI.openExternal(`https://www.dlsite.com/maniax/fsr/=/language/jp/sex_category%5B0%5D/male/keyword/${kw}/ana_flg/all/work_category%5B0%5D/doujin/work_category%5B1%5D/books/work_category%5B2%5D/pc/work_category%5B3%5D/app/order%5B0%5D/trend/options_and_or/and/per_page/30/page/1/from/fs.header`)
+          }}
+          onTryDLsiteFetch={() => handleSuggestDlsite(ctxMenu.game)}
+          onSearchSteamWeb={() => window.electronAPI.openExternal(`https://store.steampowered.com/search?term=${encodeURIComponent(ctxMenu.game.title.trim())}`)}
+          onSearchGetchuWeb={() => window.electronAPI.openGetchuSearch(ctxMenu.game.title.trim())}
         />
       )}
 
@@ -531,6 +611,13 @@ export default function App(): React.JSX.Element {
               <button className="btn-delete" onClick={handleConfirmDelete}>確認移除</button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Toast 通知 */}
+      {toast && (
+        <div className={`toast ${toast.ok ? 'toast-ok' : 'toast-err'}`} onClick={() => setToast(null)}>
+          {toast.msg}
         </div>
       )}
     </div>

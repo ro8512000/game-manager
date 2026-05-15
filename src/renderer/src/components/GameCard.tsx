@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, memo } from 'react'
 import type { Game } from '../types'
 
 interface Props {
@@ -8,25 +8,29 @@ interface Props {
   onContextMenu?: (e: React.MouseEvent) => void
 }
 
-export default function GameCard({ game, selected, onClick, onContextMenu }: Props): React.JSX.Element {
+export default memo(function GameCard({ game, selected, onClick, onContextMenu }: Props): React.JSX.Element {
   const [imgSrc, setImgSrc] = useState<string | null>(null)
 
   useEffect(() => {
+    let cancelled = false
     if (game.cover) {
-      window.electronAPI.getImageData(game.cover).then((data) => setImgSrc(data))
+      window.electronAPI.getImageData(game.cover).then((data) => {
+        if (cancelled) return
+        setImgSrc(data)
+      })
     } else if (game.coverUrl) {
-      const url = game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl
-      setImgSrc(url)
+      setImgSrc(game.coverUrl.startsWith('//') ? `https:${game.coverUrl}` : game.coverUrl)
     } else {
       setImgSrc(null)
     }
+    return () => { cancelled = true }
   }, [game.cover, game.coverUrl])
 
   return (
     <div className={`game-card ${selected ? 'selected' : ''}`} onClick={onClick} onContextMenu={onContextMenu}>
       <div className="card-cover">
         {imgSrc ? (
-          <img src={imgSrc} alt={game.title} />
+          <img src={imgSrc} alt={game.title} loading="lazy" />
         ) : (
           <div className="no-cover">{game.id}</div>
         )}
@@ -41,4 +45,4 @@ export default function GameCard({ game, selected, onClick, onContextMenu }: Pro
       </div>
     </div>
   )
-}
+})
