@@ -3,39 +3,23 @@ productName: dlsite-manager-v2
 directories:
   buildResources: build
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - out/**/*
+  - package.json
+  - '!node_modules/**'
+  - node_modules/sql.js/package.json
+  - node_modules/sql.js/dist/**
+  - node_modules/7zip-bin/package.json
+  - node_modules/7zip-bin/index.js
+  - node_modules/7zip-bin/index.d.ts
+  - node_modules/7zip-bin/win/x64/7za.exe
 asarUnpack:
-  - resources/**
+  - node_modules/7zip-bin/**
 win:
   executableName: dlsite-manager-v2
   target:
     - target: zip
       arch:
         - x64
-mac:
-  entitlementsInherit: build/entitlements.mac.plist
-  extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
-dmg:
-  artifactName: ${name}-${version}.${ext}
-linux:
-  target:
-    - AppImage
-    - snap
-    - deb
-  maintainer: electronjs.org
-  category: Utility
-appImage:
-  artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:
   provider: generic
