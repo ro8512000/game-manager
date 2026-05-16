@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import type { Game } from '../types'
 import { ALL_COLUMNS } from '../types'
 import { formatPlayTime, formatFileSize, getGroupValue } from '../utils'
@@ -15,10 +15,12 @@ interface Props {
   onLaunch: (game: Game) => void
   onContextMenu: (game: Game, e: React.MouseEvent) => void
   initialColWidths?: Record<string, number>
-  initialSortKey?: string | null
-  initialSortDir?: 'asc' | 'desc' | null
+  sortKey?: string | null
+  sortDir?: SortDir
+  onSortChange?: (key: string | null, dir: 'asc' | 'desc' | null) => void
   groupBy?: string | null
   onGroupByChange?: (key: string) => void
+  scrollKey?: number | string
 }
 
 function ListThumb({ game }: { game: Game }): React.JSX.Element {
@@ -72,25 +74,6 @@ function defaultPx(key: string): number {
   return parseInt(col.width) || 100
 }
 
-function getCellValue(game: Game, key: string): string | number | null {
-  switch (key) {
-    case 'id':           return game.id
-    case 'title':        return game.title || game.id
-    case 'circle':       return game.circle
-    case 'workType':     return game.workType ?? null
-    case 'tags':         return game.tags.join(', ')
-    case 'dlsiteRating': return game.dlsiteRating ? parseFloat(game.dlsiteRating) : null
-    case 'rating':       return game.rating
-    case 'releaseDate':  return game.releaseDate ?? null
-    case 'addedAt':      return game.addedAt
-    case 'lastPlayedAt': return game.lastPlayedAt ?? null
-    case 'playCount':    return game.playCount ?? 0
-    case 'playTime':     return game.playTime ?? 0
-    case 'folderSize':   return game.folderSize ?? null
-    default: return null
-  }
-}
-
 function renderCell(game: Game, key: string): string {
   switch (key) {
     case 'id':           return game.id
@@ -120,11 +103,20 @@ export default function GameList({
   onLaunch,
   onContextMenu,
   initialColWidths = {},
-  initialSortKey = null,
-  initialSortDir = null,
+  sortKey = null,
+  sortDir = null,
+  onSortChange,
   groupBy = null,
-  onGroupByChange
+  onGroupByChange,
+  scrollKey
 }: Props): React.JSX.Element {
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { listRef.current?.scrollTo({ top: 0 }) }, [scrollKey])
+  useEffect(() => {
+    if (!selected) return
+    listRef.current?.querySelector<HTMLElement>(`[data-uuid="${selected.uuid}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [selected])
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [hoverPreview, setHoverPreview] = useState<{
     game: Game; x: number; y: number
@@ -155,8 +147,6 @@ export default function GameList({
   }, [])
 
   const [colWidths, setColWidths] = useState<Record<string, number>>(initialColWidths)
-  const [sortKey, setSortKey] = useState<string | null>(initialSortKey)
-  const [sortDir, setSortDir] = useState<SortDir>(initialSortDir)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -260,73 +250,40 @@ export default function GameList({
 
   const handleSortClick = (key: string): void => {
     if (sortKey !== key) {
-      setSortKey(key); setSortDir('asc')
+      onSortChange?.(key, 'asc')
       window.electronAPI.saveUiSettings({ listSortKey: key, listSortDir: 'asc' })
       if (key in DATE_GROUP_MAP) onGroupByChange?.(DATE_GROUP_MAP[key])
       else onGroupByChange?.('')
     } else if (sortDir === 'asc') {
-      setSortDir('desc')
+      onSortChange?.(key, 'desc')
       window.electronAPI.saveUiSettings({ listSortDir: 'desc' })
     } else {
-      setSortKey(null); setSortDir(null)
+      onSortChange?.(null, null)
       window.electronAPI.saveUiSettings({ listSortKey: null, listSortDir: null })
       onGroupByChange?.('')
     }
   }
 
-  const UNKNOWN_GROUPS = new Set(['未知', '未知日期', '未知年份', '未知月份', '從未遊玩'])
-  const compareGroups = (ga: string, gb: string, dir: 'asc' | 'desc'): number => {
-    const aUnknown = UNKNOWN_GROUPS.has(ga)
-    const bUnknown = UNKNOWN_GROUPS.has(gb)
-    if (aUnknown && bUnknown) return 0
-    if (aUnknown) return 1
-    if (bUnknown) return -1
-    const cmp = ga.localeCompare(gb, 'ja')
-    return dir === 'desc' ? -cmp : cmp
-  }
-
-  const sortedGames = useMemo(() => {
-    let list = [...games]
-    const dir = sortDir ?? 'asc'
-    if (groupBy) {
-      list.sort((a, b) => compareGroups(getGroupValue(a, groupBy), getGroupValue(b, groupBy), dir))
-    }
-    if (sortKey && sortDir) {
-      list.sort((a, b) => {
-        if (groupBy) {
-          const ga = getGroupValue(a, groupBy)
-          const gb = getGroupValue(b, groupBy)
-          const groupCmp = compareGroups(ga, gb, dir)
-          if (groupCmp !== 0) return groupCmp
-        }
-        const va = getCellValue(a, sortKey)
-        const vb = getCellValue(b, sortKey)
-        if (va == null && vb == null) return 0
-        if (va == null) return 1
-        if (vb == null) return -1
-        let result: number
-        if (typeof va === 'number' && typeof vb === 'number') result = va - vb
-        else result = String(va).localeCompare(String(vb), 'ja')
-        return sortDir === 'asc' ? result : -result
-      })
-    }
-    return list
-  }, [games, sortKey, sortDir, groupBy])
-
-  // 鍵盤上下箭頭切換選取遊戲
+  // 鍵盤導覽：↑↓ 切換遊戲，Enter 啟動
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
+      const tag = (e.target as HTMLElement).tagName
+      if (e.key === 'Enter') {
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return
+        if (selected) onLaunch(selected)
+        return
+      }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
       if (!selected) return
-      const idx = sortedGames.findIndex((g) => g.uuid === selected.uuid)
+      const idx = games.findIndex((g) => g.uuid === selected.uuid)
       if (idx === -1) return
       e.preventDefault()
       const nextIdx = e.key === 'ArrowUp' ? idx - 1 : idx + 1
-      if (nextIdx >= 0 && nextIdx < sortedGames.length) onSelect(sortedGames[nextIdx])
+      if (nextIdx >= 0 && nextIdx < games.length) onSelect(games[nextIdx])
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selected, sortedGames, onSelect])
+  }, [selected, games, onSelect, onLaunch])
 
   if (games.length === 0) {
     return (
@@ -338,7 +295,7 @@ export default function GameList({
   }
 
   return (
-    <div className="game-list" onClick={() => setMenuPos(null)}>
+    <div className="game-list" ref={listRef} onClick={() => setMenuPos(null)}>
       <div className="game-list-inner" style={{ minWidth: totalWidth }}>
 
         {/* ── Header ── */}
@@ -378,11 +335,11 @@ export default function GameList({
         </div>
 
         {/* ── Rows ── */}
-        {sortedGames.map((game, idx) => {
+        {games.map((game, idx) => {
           const groupLabel = groupBy ? getGroupValue(game, groupBy) : null
-          const prevGroupLabel = groupBy && idx > 0 ? getGroupValue(sortedGames[idx - 1], groupBy) : null
+          const prevGroupLabel = groupBy && idx > 0 ? getGroupValue(games[idx - 1], groupBy) : null
           const showHeader = groupBy && groupLabel !== prevGroupLabel
-          const groupCount = groupBy ? sortedGames.filter((g) => getGroupValue(g, groupBy) === groupLabel).length : 0
+          const groupCount = groupBy ? games.filter((g) => getGroupValue(g, groupBy) === groupLabel).length : 0
           return (
             <React.Fragment key={game.uuid}>
               {showHeader && (
@@ -391,6 +348,7 @@ export default function GameList({
                 </div>
               )}
               <div
+                data-uuid={game.uuid}
                 className={`list-row ${selected?.uuid === game.uuid ? 'selected' : ''}`}
                 style={{ gridTemplateColumns: gridTemplate }}
                 onClick={() => onSelect(game)}

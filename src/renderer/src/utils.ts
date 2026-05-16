@@ -89,3 +89,48 @@ export function formatPlayTime(seconds: number): string {
   const remainMins = minutes % 60
   return remainMins === 0 ? `${hours} 小時` : `${hours} 小時 ${remainMins} 分鐘`
 }
+
+const UNKNOWN_GROUPS = new Set(['未知', '未知日期', '未知年份', '未知月份', '從未遊玩'])
+
+export function compareGroups(ga: string, gb: string, dir: 'asc' | 'desc'): number {
+  const aUnknown = UNKNOWN_GROUPS.has(ga)
+  const bUnknown = UNKNOWN_GROUPS.has(gb)
+  if (aUnknown && bUnknown) return 0
+  if (aUnknown) return 1
+  if (bUnknown) return -1
+  const cmp = ga.localeCompare(gb, 'ja')
+  return dir === 'desc' ? -cmp : cmp
+}
+
+export function sortListGames(
+  games: Game[],
+  sortKey: string | null,
+  sortDir: 'asc' | 'desc' | null,
+  groupBy: string | null
+): Game[] {
+  const list = [...games]
+  const dir = sortDir ?? 'asc'
+  if (groupBy) {
+    list.sort((a, b) => compareGroups(getGroupValue(a, groupBy), getGroupValue(b, groupBy), dir))
+  }
+  if (sortKey && sortDir) {
+    list.sort((a, b) => {
+      if (groupBy) {
+        const ga = getGroupValue(a, groupBy)
+        const gb = getGroupValue(b, groupBy)
+        const groupCmp = compareGroups(ga, gb, dir)
+        if (groupCmp !== 0) return groupCmp
+      }
+      const va = getGameSortValue(a, sortKey)
+      const vb = getGameSortValue(b, sortKey)
+      if (va == null && vb == null) return 0
+      if (va == null) return 1
+      if (vb == null) return -1
+      const result = typeof va === 'number' && typeof vb === 'number'
+        ? va - vb
+        : String(va).localeCompare(String(vb), 'ja')
+      return sortDir === 'asc' ? result : -result
+    })
+  }
+  return list
+}

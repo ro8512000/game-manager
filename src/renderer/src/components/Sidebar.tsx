@@ -12,6 +12,7 @@ const SOURCE_LABELS: Record<GameSource, string> = {
 interface Props {
   tags: string[]
   selectedTags: string[]
+  favoriteTags: string[]
   filterRating: number
   filterSources: GameSource[]
   favoritesOnly: boolean
@@ -20,6 +21,7 @@ interface Props {
   gameCount: number
   onTagToggle: (tag: string) => void
   onClearTags: () => void
+  onFavoriteTagToggle: (tag: string) => void
   onRatingChange: (r: number) => void
   onSourceToggle: (source: GameSource) => void
   onFavoritesChange: (v: boolean) => void
@@ -30,6 +32,7 @@ interface Props {
 export default function Sidebar({
   tags,
   selectedTags,
+  favoriteTags,
   filterRating,
   filterSources,
   favoritesOnly,
@@ -38,6 +41,7 @@ export default function Sidebar({
   gameCount,
   onTagToggle,
   onClearTags,
+  onFavoriteTagToggle,
   onRatingChange,
   onSourceToggle,
   onFavoritesChange,
@@ -46,14 +50,21 @@ export default function Sidebar({
 }: Props): React.JSX.Element {
   const [tagSearch, setTagSearch] = useState('')
 
-  const sortedTags = useMemo(() => {
-    const selected = selectedTags.filter((t) => tags.includes(t))
-    const unselected = tags.filter((t) => !selectedTags.includes(t))
-    const all = [...selected, ...unselected]
-    return tagSearch
-      ? all.filter((t) => t.toLowerCase().includes(tagSearch.toLowerCase()))
-      : all
-  }, [tags, selectedTags, tagSearch])
+  const { favTags, nonFavTags } = useMemo(() => {
+    const q = tagSearch.toLowerCase()
+    const visible = q ? tags.filter((t) => t.toLowerCase().includes(q)) : tags
+    const isFav = (t: string): boolean => favoriteTags.includes(t)
+    const isSel = (t: string): boolean => selectedTags.includes(t)
+    const fav = [
+      ...visible.filter((t) => isFav(t) && isSel(t)),
+      ...visible.filter((t) => isFav(t) && !isSel(t)),
+    ]
+    const nonFav = [
+      ...visible.filter((t) => !isFav(t) && isSel(t)),
+      ...visible.filter((t) => !isFav(t) && !isSel(t)),
+    ]
+    return { favTags: fav, nonFavTags: nonFav }
+  }, [tags, selectedTags, favoriteTags, tagSearch])
 
   const allSources: GameSource[] = ['dlsite', 'steam', 'getchu', 'other']
 
@@ -133,20 +144,30 @@ export default function Sidebar({
         />
 
         <div className="tag-list">
-          {sortedTags.map((tag) => {
+          {favTags.map((tag) => {
             const isSelected = selectedTags.includes(tag)
             return (
-              <button
-                key={tag}
-                className={`tag-btn ${isSelected ? 'active' : ''}`}
-                onClick={() => onTagToggle(tag)}
-              >
+              <button key={tag} className={`tag-btn ${isSelected ? 'active' : ''}`} onClick={() => onTagToggle(tag)}>
                 {isSelected && <span className="tag-check">✓ </span>}
-                {tag}
+                <span className="tag-name">{tag}</span>
+                <span className="tag-fav pinned" title="取消最愛" onClick={(e) => { e.stopPropagation(); onFavoriteTagToggle(tag) }}>★</span>
               </button>
             )
           })}
-          {sortedTags.length === 0 && tagSearch && (
+          {favTags.length > 0 && nonFavTags.length > 0 && (
+            <div className="tag-divider" />
+          )}
+          {nonFavTags.map((tag) => {
+            const isSelected = selectedTags.includes(tag)
+            return (
+              <button key={tag} className={`tag-btn ${isSelected ? 'active' : ''}`} onClick={() => onTagToggle(tag)}>
+                {isSelected && <span className="tag-check">✓ </span>}
+                <span className="tag-name">{tag}</span>
+                <span className="tag-fav" title="設為最愛" onClick={(e) => { e.stopPropagation(); onFavoriteTagToggle(tag) }}>★</span>
+              </button>
+            )
+          })}
+          {favTags.length === 0 && nonFavTags.length === 0 && tagSearch && (
             <div style={{ fontSize: 11, color: 'var(--text2)', padding: '4px 8px' }}>
               無符合的標籤
             </div>

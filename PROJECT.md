@@ -132,6 +132,7 @@ interface Game {
 | `filterSources` | 來源篩選 `['dlsite','steam','getchu','other']` |
 | `ratingCollapsed` / `sourceCollapsed` | 側欄區塊收合狀態 |
 | `pageSize` | 分頁大小（`50`/`100`/`250`/`500`/`1000`/`null`=全部顯示） |
+| `favoriteTags` | 最愛標籤陣列（置頂顯示） |
 
 ---
 
@@ -287,6 +288,7 @@ interface Game {
 - 分頁大小持久化至 `ui-settings.json`（key: `pageSize`）
 - 切換篩選條件或分頁大小時自動重置到第 1 頁
 - 磁磚視圖和列表視圖共用同一分頁狀態
+- **切換分頁時列表自動捲回頂端**（透過 `scrollKey={currentPage}` prop 觸發）
 
 ### 遊玩時間計算
 - `spawn` 啟動遊戲（detached，保留 close 事件）
@@ -306,7 +308,10 @@ interface Game {
 - 我的最愛篩選
 - **來源篩選**（可收合）：DLsite 遊戲 / Steam 遊戲 / Getchu 遊戲 / 其他遊戲
 - **評分篩選**（可收合）：0-5 星以上
-- 標籤多選（AND 邏輯）+ 關鍵字過濾 + 已選置頂
+- **標籤過濾**：多選（AND 邏輯）+ 關鍵字搜尋
+  - 各標籤 hover 顯示 ★ 按鈕，點擊標為「最愛標籤」永久置頂
+  - 排序：最愛已選 → 最愛未選 → 一般已選 → 一般未選；最愛與非最愛間有分隔線
+  - 最愛標籤持久化至 `ui-settings.json`（key: `favoriteTags`）
 - 所有篩選狀態和收合狀態持久化
 
 ### GameGrid（磁磚視圖）
@@ -322,7 +327,9 @@ interface Game {
 - **分組顯示**：Toolbar 分組下拉選單（社團/評分/作品形式/來源/發售年份/各月份選項）
 - **日期欄位自動分組**：點擊加入時間/發售日/上次遊玩排序時，自動套用對應月份分組
 - 滑鼠停留 300ms 顯示封面圖預覽；移到預覽圖上可滾輪切換圖片（背景列表不捲動）
-- **鍵盤導覽**：選取遊戲後按 ↑↓ 切換上/下一款（在當前分頁內）
+- **鍵盤導覽**：
+  - ↑↓ 切換上/下一款（在當前分頁內），列表自動捲動確保選中行可見（`scrollIntoView({ block: 'nearest' })`，`data-uuid` 定位 DOM）
+  - Enter 啟動選中遊戲（輸入框內不觸發）
 - 雙擊啟動遊戲
 - 所有欄位/排序/分組/寬度設定持久化
 
@@ -338,6 +345,7 @@ interface Game {
   - 封面/縮圖 hover 顯示上傳按鈕
   - 縮圖列末端有 + 上傳樣本圖
 - 圖片點擊開啟燈箱（鍵盤/滾輪切換、Esc 關閉）
+- **← → 方向鍵**切換預覽圖（`activeIdx` 循環）；輸入框內不觸發
 - Tag 編輯模式（✎ → × 移除 + 新增輸入框 + 自動補全）
 - 我的最愛切換（♡/♥）、DLsite ↗ / Steam ↗ / Getchu ↗ 連結（依代碼前綴顯示對應來源）
 - **↻ 重新抓取**支援 DLsite（RJ/VJ/BJ）、Steam（ST）、Getchu（GC）
@@ -422,6 +430,8 @@ interface Game {
 17. **DLsite suggest API**：回傳格式為 `cb({"work":[{"workno":"RJ...","work_name":"...","maker_name":"..."}]})` 的 JSONP；解析時不依賴 callback 名稱，直接找第一個 `(` 和最後一個 `)` 取 JSON 內容。
 18. **Getchu 搜尋 URL 編碼**：Getchu 服務器按 EUC-JP 解讀 query string，UTF-8 的 `encodeURIComponent` 會造成亂碼；須用 `iconv-lite` 將關鍵字轉 EUC-JP bytes 再逐 byte percent-encode。
 19. **GameCard React.memo**：GameCard 包了 `React.memo`，避免父元件重繪時不必要的卡片重新渲染。
+20. **列表排序順序**：排序在 `App.tsx` 用 `sortListGames()`（`utils.ts`）完成後再分頁，確保跨頁排序正確；`GameList` 的 `sortKey`/`sortDir` 是受控 props，點擊欄位標題呼叫 `onSortChange` 回調。
+21. **launchGame 語系**：`launchGame` 呼叫時帶 `locale: game.launchLocale ?? undefined`，主程式判斷是否用 Locale Emulator 啟動；任何入口（雙擊、Enter、右鍵選單）皆生效。
 
 ---
 

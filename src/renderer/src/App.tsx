@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Game, GamesData, ViewMode } from './types'
 import { ALL_COLUMNS, DEFAULT_COLUMNS } from './types'
 import type { Settings } from './electron.d'
-import { localDateTime, getGameSortValue, findDuplicates } from './utils'
+import { localDateTime, getGameSortValue, findDuplicates, sortListGames } from './utils'
 import Sidebar from './components/Sidebar'
 import GameGrid from './components/GameGrid'
 import GameList from './components/GameList'
@@ -24,8 +24,8 @@ export default function App(): React.JSX.Element {
   const [selected, setSelected] = useState<Game | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
   const [initColWidths, setInitColWidths] = useState<Record<string, number>>({})
-  const [initSortKey, setInitSortKey] = useState<string | null>(null)
-  const [initSortDir, setInitSortDir] = useState<'asc' | 'desc' | null>(null)
+  const [listSortKey, setListSortKey] = useState<string | null>(null)
+  const [listSortDir, setListSortDir] = useState<'asc' | 'desc' | null>(null)
 
   const handleSetViewMode = (mode: ViewMode): void => {
     setViewMode(mode)
@@ -44,7 +44,7 @@ export default function App(): React.JSX.Element {
     let exe = game.exe
     if (!exe && game.path) exe = await window.electronAPI.findExe(game.path)
     if (!exe) return
-    window.electronAPI.launchGame({ exePath: exe, gameId: game.id })
+    window.electronAPI.launchGame({ exePath: exe, gameId: game.id, locale: game.launchLocale ?? undefined })
     const updated: Game = { ...game, lastPlayedAt: localDateTime(), playCount: (game.playCount ?? 0) + 1, ...(exe && !game.exe ? { exe } : {}) }
     const newData = { games: dataRef.current.games.map((g) => (g.uuid === game.uuid ? updated : g)) }
     setData(newData)
@@ -94,6 +94,7 @@ export default function App(): React.JSX.Element {
   }
   const [search, setSearch] = useState('')
   const [filterTags, setFilterTags] = useState<string[]>([])
+  const [favoriteTags, setFavoriteTags] = useState<string[]>([])
   const [filterRating, setFilterRating] = useState(0)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [filterSources, setFilterSources] = useState<('dlsite' | 'steam' | 'getchu' | 'other')[]>(['dlsite', 'steam', 'getchu', 'other'])
@@ -140,6 +141,14 @@ export default function App(): React.JSX.Element {
   const handleTagToggle = (tag: string): void => {
     setFilterTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])
   }
+
+  const handleFavoriteTagToggle = (tag: string): void => {
+    setFavoriteTags((prev) => {
+      const next = prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+      window.electronAPI.saveUiSettings({ favoriteTags: next })
+      return next
+    })
+  }
   const handleFilterTagSingle = (tag: string): void => setFilterTags([tag])
   const [addInitialFile, setAddInitialFile] = useState<InitialFile | null>(null)
   const [showSettings, setShowSettings] = useState(false)
@@ -179,11 +188,12 @@ export default function App(): React.JSX.Element {
       if (ui.listColumns) setVisibleColumns(ui.listColumns as string[])
       if (ui.detailWidth) { setDetailWidth(ui.detailWidth as number); detailWidthRef.current = ui.detailWidth as number }
       if (ui.listColWidths) setInitColWidths(ui.listColWidths as Record<string, number>)
-      if (ui.listSortKey) setInitSortKey(ui.listSortKey as string)
-      if (ui.listSortDir) setInitSortDir(ui.listSortDir as 'asc' | 'desc')
+      if (ui.listSortKey) setListSortKey(ui.listSortKey as string)
+      if (ui.listSortDir) setListSortDir(ui.listSortDir as 'asc' | 'desc')
       if (ui.filterRating !== undefined) setFilterRating(ui.filterRating as number)
       if (ui.favoritesOnly !== undefined) setFavoritesOnly(ui.favoritesOnly as boolean)
       if (ui.filterSources) setFilterSources(ui.filterSources as ('dlsite' | 'steam' | 'getchu' | 'other')[])
+      if (ui.favoriteTags) setFavoriteTags(ui.favoriteTags as string[])
       if (ui.ratingCollapsed !== undefined) setRatingCollapsed(ui.ratingCollapsed as boolean)
       if (ui.sourceCollapsed !== undefined) setSourceCollapsed(ui.sourceCollapsed as boolean)
       if (ui.gridSortKey) setGridSortKey(ui.gridSortKey as string)
@@ -299,6 +309,11 @@ export default function App(): React.JSX.Element {
     window.electronAPI.saveUiSettings({ listGroupBy: val })
   }
 
+  const handleListSortChange = (key: string | null, dir: 'asc' | 'desc' | null): void => {
+    setListSortKey(key)
+    setListSortDir(dir)
+  }
+
   const handleGridSortChange = (key: string | null): void => {
     setGridSortKey(key)
     window.electronAPI.saveUiSettings({ gridSortKey: key })
@@ -326,13 +341,15 @@ export default function App(): React.JSX.Element {
 
   const allTags = Array.from(new Set(data.games.flatMap((g) => g.tags))).sort()
 
+  const sortedList = sortListGames(filtered, listSortKey, listSortDir, listGroupBy || null)
+
   // 換頁：篩選結果數量或 pageSize 改變時重置到第 1 頁
   const filteredLen = filtered.length
   useEffect(() => { setCurrentPage(1) }, [filteredLen, pageSize])
 
   const totalPages = pageSize ? Math.max(1, Math.ceil(filtered.length / pageSize)) : 1
   const paginatedSortedFiltered = pageSize ? sortedFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize) : sortedFiltered
-  const paginatedFiltered = pageSize ? filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize) : filtered
+  const paginatedFiltered = pageSize ? sortedList.slice((currentPage - 1) * pageSize, currentPage * pageSize) : sortedList
 
   const handlePageSizeChange = (val: number | null): void => {
     setPageSize(val)
@@ -363,6 +380,8 @@ export default function App(): React.JSX.Element {
         <Sidebar
           tags={allTags}
           selectedTags={filterTags}
+          favoriteTags={favoriteTags}
+          onFavoriteTagToggle={handleFavoriteTagToggle}
           filterRating={filterRating}
           filterSources={filterSources}
           favoritesOnly={favoritesOnly}
@@ -459,10 +478,12 @@ export default function App(): React.JSX.Element {
               onLaunch={launchGame}
               onContextMenu={handleContextMenu}
               initialColWidths={initColWidths}
-              initialSortKey={initSortKey}
-              initialSortDir={initSortDir}
+              sortKey={listSortKey}
+              sortDir={listSortDir}
+              onSortChange={handleListSortChange}
               groupBy={listGroupBy || null}
               onGroupByChange={handleListGroupByChange}
+              scrollKey={currentPage}
             />
           )}
 

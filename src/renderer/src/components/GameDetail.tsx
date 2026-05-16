@@ -80,6 +80,23 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
     return window.electronAPI.onProgress((data) => setRefetchProgress(data))
   }, [])
 
+  useEffect(() => {
+    const total = (game.id.startsWith('ST') ? 1 : 2) + (game.sampleImages?.length ?? 0)
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if (total <= 1) return
+      e.preventDefault()
+      setActiveIdx((prev) => {
+        const delta = e.key === 'ArrowRight' ? 1 : -1
+        return (prev + delta + total) % total
+      })
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [game.id, game.sampleImages?.length])
+
   const handleSaveId = (): void => {
     setEditingId(false)
     const newId = idInput.trim().toUpperCase()

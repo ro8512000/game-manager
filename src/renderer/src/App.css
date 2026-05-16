@@ -99,6 +99,9 @@ body {
 
 .tag-list { display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; }
 .tag-btn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   text-align: left;
   background: none;
   border: 1px solid transparent;
@@ -107,15 +110,21 @@ body {
   border-radius: 4px;
   cursor: pointer;
   font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   transition: all 0.15s;
   min-height: 26px;
   flex-shrink: 0;
+  width: 100%;
 }
 .tag-btn:hover { border-color: var(--accent); color: var(--text); }
 .tag-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+.tag-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tag-fav { flex-shrink: 0; opacity: 0; font-size: 10px; color: var(--star, #f5c518); transition: opacity 0.1s; line-height: 1; }
+.tag-fav.pinned { opacity: 1; }
+.tag-btn:hover .tag-fav { opacity: 0.5; }
+.tag-btn:hover .tag-fav:hover { opacity: 1; }
+.tag-btn.active .tag-fav { color: white; }
+.tag-btn.active .tag-fav.pinned { opacity: 1; }
+.tag-divider { height: 1px; background: var(--border); margin: 4px 0; flex-shrink: 0; }
 
 .content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .toolbar {
