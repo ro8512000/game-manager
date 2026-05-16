@@ -432,6 +432,8 @@ interface Game {
 19. **GameCard React.memo**：GameCard 包了 `React.memo`，避免父元件重繪時不必要的卡片重新渲染。
 20. **列表排序順序**：排序在 `App.tsx` 用 `sortListGames()`（`utils.ts`）完成後再分頁，確保跨頁排序正確；`GameList` 的 `sortKey`/`sortDir` 是受控 props，點擊欄位標題呼叫 `onSortChange` 回調。
 21. **launchGame 語系**：`launchGame` 呼叫時帶 `locale: game.launchLocale ?? undefined`，主程式判斷是否用 Locale Emulator 啟動；任何入口（雙擊、Enter、右鍵選單）皆生效。
+22. **磁磚版面**：`.game-card` 不可加 `overflow: hidden`（會導致高度計算為 0，圖片不顯示）；`.card-cover` 使用 `padding-bottom: 56.25%` + absolute 定位取代 `aspect-ratio`；`.content` 使用 `display: grid; grid-template-rows: auto 1fr auto` 確保中間區域正確佔滿剩餘高度。
+23. **Build 大小**：`@electron-toolkit/*`、`@tanstack/react-virtual` 在 devDependencies（vite bundle）；`sql.js`、`7zip-bin` 在 dependencies（需要 runtime 檔案）；`electron-builder.yml` 只打包 `sql.js/dist/**` 和 `7zip-bin/win/x64/7za.exe`；壓縮後約 131MB。
 
 ---
 
