@@ -232,6 +232,7 @@ export default function ScanFolderModal({ existingGames, gamesDir, onAdd, onClos
           workType,
           dlsiteRating,
           lastPlayedAt: null,
+          infoUpdatedAt: (item.detectedCode && cover) ? localDateTime() : null,
           playCount: 0,
           playTime: 0,
           isFavorite: false,

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { Game } from '../types'
 import { localDateTime, formatPlayTime, formatFileSize } from '../utils'
 import ImageLightbox from './ImageLightbox'
@@ -22,6 +22,9 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
   const [imgSrcs, setImgSrcs] = useState<(string | null)[]>([])
   const [activeIdx, setActiveIdx] = useState(0)
   const [note, setNote] = useState(game.note)
+  const [description, setDescription] = useState('')
+  const [descLoaded, setDescLoaded] = useState(false)
+  const [fetchingDesc, setFetchingDesc] = useState(false)
   const [rating, setRating] = useState(game.rating)
   const [editableTags, setEditableTags] = useState<string[]>(game.tags)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -38,24 +41,37 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [lightboxIdx, setLightboxIdx] = useState(0)
   const [imgEditMode, setImgEditMode] = useState(false)
+  const prevUuidRef = useRef(game.uuid)
 
   useEffect(() => {
+    const uuidChanged = game.uuid !== prevUuidRef.current
+    prevUuidRef.current = game.uuid
+
     setNote(game.note)
     setRating(game.rating)
     setEditableTags(game.tags)
-    setEditingTitle(false)
     setTitleInput(game.title)
-    setEditingId(false)
     setIdInput(game.id)
     setRefetching(false)
     setRefetchProgress(null)
-    setTagInput('')
-    setShowTagSuggestions(false)
-    setTagEditMode(false)
-    setActiveIdx(0)
-    setShowDeleteDialog(false)
-    setDeleteFiles(false)
-    setImgEditMode(false)
+
+    if (uuidChanged) {
+      setEditingTitle(false)
+      setEditingId(false)
+      setTagInput('')
+      setShowTagSuggestions(false)
+      setTagEditMode(false)
+      setActiveIdx(0)
+      setShowDeleteDialog(false)
+      setDeleteFiles(false)
+      setImgEditMode(false)
+      setDescription('')
+      setDescLoaded(false)
+      window.electronAPI.loadDescription(game.id).then((text) => {
+        setDescription(text)
+        setDescLoaded(true)
+      })
+    }
 
     const isSteamGame = game.id.startsWith('ST')
     // Steam: index 0=cover, 1+=sampleImages; others: 0=cover, 1=listImage, 2+=sampleImages
@@ -121,7 +137,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
         ...game,
         title: (d.title as string) || game.title,
         circle: (d.circle as string) || game.circle,
-        tags: (d.tags as string[]) || game.tags,
+        tags: (d.tags as string[])?.length > 0 ? (d.tags as string[]) : game.tags,
         cover: (d.localCover as string) || game.cover,
         listImage: (d.localListImage as string) || game.listImage,
         coverUrl: (d.coverUrl as string) || game.coverUrl,
@@ -129,6 +145,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
         releaseDate: (d.releaseDate as string) || game.releaseDate,
         workType: (d.workType as string) || game.workType,
         dlsiteRating: (d.dlsiteRating as string) || game.dlsiteRating,
+        infoUpdatedAt: localDateTime(),
       })
     }
     setRefetching(false)
@@ -262,6 +279,16 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
 
   const handleSaveNote = (): void => {
     onUpdate({ ...game, note, rating, tags: editableTags })
+  }
+
+  const handleFetchDescription = async (): Promise<void> => {
+    if (fetchingDesc) return
+    setFetchingDesc(true)
+    const result = await window.electronAPI.fetchDLsiteDescription(game.id)
+    if (result.success && result.description) {
+      setDescription(result.description)
+    }
+    setFetchingDesc(false)
   }
 
   const handleConfirmDelete = async (): Promise<void> => {
@@ -520,6 +547,43 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
           <button className="btn-delete" onClick={() => setShowDeleteDialog(true)}>移除</button>
         </div>
 
+        <div className="detail-desc-section">
+          <div className="detail-desc-header">
+            <span className="detail-desc-label">遊戲介紹</span>
+            <div className="detail-desc-actions">
+              {/^[RVB]J\d{6,8}$/i.test(game.id) && (
+                <button
+                  className="btn-save-desc"
+                  onClick={handleFetchDescription}
+                  disabled={!descLoaded || fetchingDesc}
+                >
+                  {fetchingDesc ? '抓取中...' : description ? '重新抓取' : '從 DLsite 抓取'}
+                </button>
+              )}
+              {description && (
+                <button
+                  className="btn-save-desc"
+                  onClick={() => { setDescription(''); window.electronAPI.saveDescription(game.id, '') }}
+                >
+                  清除
+                </button>
+              )}
+            </div>
+          </div>
+          {!descLoaded ? (
+            <div className="detail-desc-empty">載入中...</div>
+          ) : description ? (
+            <div
+              className="detail-desc-html"
+              dangerouslySetInnerHTML={{ __html: description }}
+            />
+          ) : (
+            <div className="detail-desc-empty">
+              {/^[RVB]J\d{6,8}$/i.test(game.id) ? '尚未抓取介紹，按上方按鈕從 DLsite 取得' : '無介紹資料'}
+            </div>
+          )}
+        </div>
+
         <div className="detail-stats">
           {game.releaseDate && (
             <div className="stat-row">
@@ -537,6 +601,12 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
             <span className="stat-label">加入時間</span>
             <span className="stat-value">{game.addedAt}</span>
           </div>
+          {game.infoUpdatedAt && (
+            <div className="stat-row">
+              <span className="stat-label">資訊更新</span>
+              <span className="stat-value">{game.infoUpdatedAt}</span>
+            </div>
+          )}
           <div className="stat-row">
             <span className="stat-label">遊玩次數</span>
             <span className="stat-value">{game.playCount ?? 0} 次</span>

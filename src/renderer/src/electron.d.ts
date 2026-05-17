@@ -3,6 +3,7 @@ import type { GamesData, Game } from './types'
 export interface Settings {
   gamesDir: string | null
   leProcPath: string | null
+  fetchDescriptionOnFetch: boolean
 }
 
 export interface PreviewMoveResult {
@@ -69,6 +70,9 @@ interface ElectronAPI {
   deleteFolder: (folderPath: string) => Promise<boolean>
   deleteFile: (filePath: string) => Promise<boolean>
   getFolderSize: (folderPath: string) => Promise<number | null>
+  loadDescription: (gameId: string) => Promise<string>
+  saveDescription: (gameId: string, text: string) => Promise<boolean>
+  fetchDLsiteDescription: (code: string) => Promise<{ success: boolean; description?: string; error?: string }>
   selectImportDb: () => Promise<string | null>
   importPreview: (dbPath: string) => Promise<{ success: boolean; count?: number; error?: string }>
   importRun: (args: { dbPath: string; skipDuplicates: boolean; existingIds: string[] }) => Promise<{ success: boolean; imported: Record<string, unknown>[]; skipped: number; errors: string[]; error?: string }>

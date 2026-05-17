@@ -82,6 +82,7 @@ interface Game {
   workType: string | null      // 作品形式
   dlsiteRating: string | null  // DLsite 社群評分
   lastPlayedAt: string | null  // 上次遊玩時間
+  infoUpdatedAt: string | null // 最後資訊更新時間（重新抓取 DLsite/Steam/Getchu 時更新）
   playCount: number            // 遊玩次數
   playTime: number             // 累積遊玩時間（秒）
   isFavorite: boolean
@@ -109,10 +110,11 @@ interface Game {
 
 ### settings.json
 ```json
-{ "gamesDir": "G:/Games", "leProcPath": "C:/LEd/LEProc.exe" }
+{ "gamesDir": "G:/Games", "leProcPath": "C:/LEd/LEProc.exe", "fetchDescriptionOnFetch": false }
 ```
 - `gamesDir`：新增遊戲時，遊戲資料夾移動/解壓縮的目標目錄
 - `leProcPath`：Locale Emulator 的 `LEProc.exe` 路徑；設定後可對個別遊戲啟用 LE 啟動
+- `fetchDescriptionOnFetch`（預設 `false`）：每次重新抓取 DLsite 遊戲資訊時，也自動抓取遊戲介紹 HTML 並儲存
 
 ### ui-settings.json
 所有 UI 狀態存此檔（不用 localStorage，避免 dev server port 變動造成重置）：
@@ -169,6 +171,9 @@ interface Game {
 | `games:deleteFile(path)` | 刪除單一檔案（刪除圖片用） |
 | `games:getFolderSize(path)` | 遞迴計算資料夾大小（bytes） |
 | `games:uploadImage({gameId, role})` | 上傳圖片；role: `'cover'`/`'listImage'`/`'sample'` |
+| `games:loadDescription(gameId)` | 讀取 `game-images/{id}/description.html`（desc_img_*.* 圖片轉 base64 inline）；無則讀 `.txt`；找不到回傳空字串 |
+| `games:saveDescription({gameId, text})` | 寫入 `game-images/{id}/description.html`；text 為空則刪除檔案 |
+| `games:fetchDLsiteDescription(code)` | 抓取 DLsite 介紹 HTML、處理 lazy-load/class/script、下載圖片為 `desc_img_{n}.ext`、存 `description.html`，回傳帶 base64 圖片的 display HTML |
 
 ### 檔案選擇
 | 通道 | 說明 |

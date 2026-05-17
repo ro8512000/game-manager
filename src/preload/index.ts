@@ -37,6 +37,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   moveToLibrary: (args: unknown) => ipcRenderer.invoke('games:moveToLibrary', args),
   extractArchive: (args: unknown) => ipcRenderer.invoke('games:extractArchive', args),
 
+  loadDescription: (gameId: string) => ipcRenderer.invoke('games:loadDescription', gameId),
+  saveDescription: (gameId: string, text: string) => ipcRenderer.invoke('games:saveDescription', { gameId, text }),
+  fetchDLsiteDescription: (code: string) => ipcRenderer.invoke('games:fetchDLsiteDescription', code),
+
   // Import from old version
   selectImportDb: () => ipcRenderer.invoke('import:selectDb'),
   importPreview: (dbPath: string) => ipcRenderer.invoke('import:preview', dbPath),

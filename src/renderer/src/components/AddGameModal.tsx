@@ -180,6 +180,7 @@ export default function AddGameModal({
       addedAt: localDateTime(),
       language: 'ja',
       lastPlayedAt: null,
+      infoUpdatedAt: info ? localDateTime() : null,
       playCount: 0,
       playTime: 0,
       isFavorite: false,

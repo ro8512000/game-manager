@@ -20,7 +20,7 @@ type InitialFile = { path: string; type: 'exe' | 'archive'; code: string | null 
 
 export default function App(): React.JSX.Element {
   const [data, setData] = useState<GamesData>({ games: [] })
-  const [settings, setSettings] = useState<Settings>({ gamesDir: null, leProcPath: null })
+  const [settings, setSettings] = useState<Settings>({ gamesDir: null, leProcPath: null, fetchDescriptionOnFetch: false })
   const [selected, setSelected] = useState<Game | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
   const [initColWidths, setInitColWidths] = useState<Record<string, number>>({})
@@ -94,6 +94,7 @@ export default function App(): React.JSX.Element {
   }
   const [search, setSearch] = useState('')
   const [filterTags, setFilterTags] = useState<string[]>([])
+  const [tagFilterOr, setTagFilterOr] = useState(false)
   const [favoriteTags, setFavoriteTags] = useState<string[]>([])
   const [filterRating, setFilterRating] = useState(0)
   const [favoritesOnly, setFavoritesOnly] = useState(false)
@@ -140,6 +141,11 @@ export default function App(): React.JSX.Element {
 
   const handleTagToggle = (tag: string): void => {
     setFilterTags((prev) => prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag])
+  }
+
+  const handleTagFilterOrChange = (v: boolean): void => {
+    setTagFilterOr(v)
+    window.electronAPI.saveUiSettings({ tagFilterOr: v })
   }
 
   const handleFavoriteTagToggle = (tag: string): void => {
@@ -194,6 +200,7 @@ export default function App(): React.JSX.Element {
       if (ui.favoritesOnly !== undefined) setFavoritesOnly(ui.favoritesOnly as boolean)
       if (ui.filterSources) setFilterSources(ui.filterSources as ('dlsite' | 'steam' | 'getchu' | 'other')[])
       if (ui.favoriteTags) setFavoriteTags(ui.favoriteTags as string[])
+      if (ui.tagFilterOr !== undefined) setTagFilterOr(ui.tagFilterOr as boolean)
       if (ui.ratingCollapsed !== undefined) setRatingCollapsed(ui.ratingCollapsed as boolean)
       if (ui.sourceCollapsed !== undefined) setSourceCollapsed(ui.sourceCollapsed as boolean)
       if (ui.gridSortKey) setGridSortKey(ui.gridSortKey as string)
@@ -231,11 +238,11 @@ export default function App(): React.JSX.Element {
 
   const updateGame = useCallback(
     async (updated: Game) => {
-      const newData = { games: data.games.map((g) => (g.uuid === updated.uuid ? updated : g)) }
+      const newData = { games: dataRef.current.games.map((g) => (g.uuid === updated.uuid ? updated : g)) }
       await save(newData)
       setSelected(updated)
     },
-    [data, save]
+    [save]
   )
 
   const deleteGame = useCallback(
@@ -261,7 +268,7 @@ export default function App(): React.JSX.Element {
       id: result.id || game.id,
       title: (d.title as string) || game.title,
       circle: (d.circle as string) || game.circle,
-      tags: (d.tags as string[]) || game.tags,
+      tags: (d.tags as string[])?.length > 0 ? (d.tags as string[]) : game.tags,
       cover: (d.localCover as string) || game.cover,
       listImage: (d.localListImage as string) || game.listImage,
       coverUrl: (d.coverUrl as string) || game.coverUrl,
@@ -269,6 +276,7 @@ export default function App(): React.JSX.Element {
       releaseDate: (d.releaseDate as string) || game.releaseDate,
       workType: (d.workType as string) || game.workType,
       dlsiteRating: (d.dlsiteRating as string) || game.dlsiteRating,
+      infoUpdatedAt: localDateTime(),
     })
     setToast({ msg: `✓ 已更新為 ${result.id}: ${(d.title as string) || game.title}`, ok: true })
   }, [updateGame])
@@ -299,7 +307,8 @@ export default function App(): React.JSX.Element {
       g.id.toLowerCase().includes(q) ||
       g.circle.toLowerCase().includes(q) ||
       g.tags.some((t) => t.toLowerCase().includes(q))
-    const matchTag = filterTags.length === 0 || filterTags.every((t) => g.tags.includes(t))
+    const matchTag = filterTags.length === 0 ||
+      (tagFilterOr ? filterTags.some((t) => g.tags.includes(t)) : filterTags.every((t) => g.tags.includes(t)))
     const matchRating = !filterRating || g.rating >= filterRating
     return matchSearch && matchTag && matchRating
   })
@@ -381,6 +390,7 @@ export default function App(): React.JSX.Element {
           tags={allTags}
           selectedTags={filterTags}
           favoriteTags={favoriteTags}
+          tagFilterOr={tagFilterOr}
           onFavoriteTagToggle={handleFavoriteTagToggle}
           filterRating={filterRating}
           filterSources={filterSources}
@@ -389,6 +399,7 @@ export default function App(): React.JSX.Element {
           sourceCollapsed={sourceCollapsed}
           onTagToggle={handleTagToggle}
           onClearTags={() => setFilterTags([])}
+          onTagFilterOrChange={handleTagFilterOrChange}
           onRatingChange={handleRatingChange}
           onSourceToggle={handleSourceToggle}
           onFavoritesChange={handleFavoritesChange}

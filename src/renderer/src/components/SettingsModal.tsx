@@ -10,6 +10,7 @@ interface Props {
 export default function SettingsModal({ settings, onSave, onClose }: Props): React.JSX.Element {
   const [gamesDir, setGamesDir] = useState(settings.gamesDir || '')
   const [leProcPath, setLeProcPath] = useState(settings.leProcPath || '')
+  const [fetchDescriptionOnFetch, setFetchDescriptionOnFetch] = useState(settings.fetchDescriptionOnFetch ?? false)
   const [locationInfo, setLocationInfo] = useState<DataLocationInfo | null>(null)
   const [migrating, setMigrating] = useState(false)
   const [migrateProgress, setMigrateProgress] = useState<{ msg: string; pct: number } | null>(null)
@@ -30,7 +31,7 @@ export default function SettingsModal({ settings, onSave, onClose }: Props): Rea
   }
 
   const handleSave = async (): Promise<void> => {
-    await onSave({ gamesDir: gamesDir.trim() || null, leProcPath: leProcPath.trim() || null })
+    await onSave({ gamesDir: gamesDir.trim() || null, leProcPath: leProcPath.trim() || null, fetchDescriptionOnFetch })
     onClose()
   }
 
@@ -94,6 +95,21 @@ export default function SettingsModal({ settings, onSave, onClose }: Props): Rea
             </div>
             <div className="settings-hint">
               設定後，個別遊戲可選擇啟動語系，使用 Locale Emulator 開啟。
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-label">抓取設定</div>
+            <label className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                checked={fetchDescriptionOnFetch}
+                onChange={(e) => setFetchDescriptionOnFetch(e.target.checked)}
+              />
+              抓取遊戲資訊時同時抓取遊戲介紹（DLsite）
+            </label>
+            <div className="settings-hint">
+              開啟後，每次重新抓取 DLsite 遊戲資訊時，也會自動抓取並儲存遊戲介紹頁面內容（含圖片）。
             </div>
           </div>
 

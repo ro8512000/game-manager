@@ -17,6 +17,7 @@ export interface Game {
   workType: string | null
   dlsiteRating: string | null
   lastPlayedAt: string | null
+  infoUpdatedAt: string | null
   playCount: number
   playTime: number
   isFavorite: boolean

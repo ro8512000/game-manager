@@ -430,6 +430,23 @@ body {
 }
 .detail-note:focus { border-color: var(--accent); }
 .detail-footer { display: flex; justify-content: space-between; }
+.detail-desc-section { display: flex; flex-direction: column; gap: 6px; }
+.detail-desc-header { display: flex; align-items: center; justify-content: space-between; }
+.detail-desc-label { font-size: 11px; color: var(--text2); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.detail-desc-actions { display: flex; gap: 6px; }
+.btn-save-desc { background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 3px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+.btn-save-desc:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-save-desc:disabled { opacity: 0.4; cursor: default; }
+.detail-desc-empty { font-size: 12px; color: var(--text2); padding: 12px 0; }
+.detail-desc-html { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 14px; font-size: 13px; line-height: 1.8; color: var(--text); max-height: 500px; overflow-y: auto; word-break: break-word; }
+.detail-desc-html p { margin: 0 0 10px; }
+.detail-desc-html div { margin-bottom: 6px; }
+.detail-desc-html img { max-width: 100%; height: auto; display: block; margin: 10px auto; border-radius: 4px; }
+.detail-desc-html h1, .detail-desc-html h2, .detail-desc-html h3 { font-size: 14px; font-weight: 600; margin: 14px 0 6px; color: var(--text); }
+.detail-desc-html ul, .detail-desc-html ol { padding-left: 20px; margin: 6px 0 10px; }
+.detail-desc-html li { margin: 3px 0; }
+.detail-desc-html table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+.detail-desc-html td, .detail-desc-html th { padding: 4px 8px; vertical-align: top; }
 .btn-save {
   background: var(--accent);
   color: white;
@@ -638,6 +655,8 @@ button.primary:hover { background: var(--accent-hover); }
 .mode-appdata { background: #1e2d4a; color: #5b9cf6; }
 .migrate-btn { background: var(--bg3); border: 1px solid var(--border); color: var(--text); font-size: 12px; padding: 7px 12px; border-radius: 6px; cursor: pointer; text-align: left; }
 .migrate-btn:hover { border-color: var(--accent); color: var(--accent); }
+.settings-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; user-select: none; }
+.settings-checkbox-row input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
 
 /* File selection in AddGameModal */
 .file-section { display: flex; flex-direction: column; gap: 8px; }
@@ -805,6 +824,9 @@ button.primary:hover { background: var(--accent-hover); }
   overflow: hidden;
 }
 .sidebar-tag-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.sidebar-tag-header-right { display: flex; align-items: center; gap: 6px; }
+.tag-or-toggle { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--text2); cursor: pointer; user-select: none; }
+.tag-or-toggle input[type="checkbox"] { width: 12px; height: 12px; accent-color: var(--accent); cursor: pointer; }
 .clear-tags-btn {
   background: none;
   border: none;

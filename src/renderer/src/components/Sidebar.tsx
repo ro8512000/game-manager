@@ -13,6 +13,7 @@ interface Props {
   tags: string[]
   selectedTags: string[]
   favoriteTags: string[]
+  tagFilterOr: boolean
   filterRating: number
   filterSources: GameSource[]
   favoritesOnly: boolean
@@ -22,6 +23,7 @@ interface Props {
   onTagToggle: (tag: string) => void
   onClearTags: () => void
   onFavoriteTagToggle: (tag: string) => void
+  onTagFilterOrChange: (v: boolean) => void
   onRatingChange: (r: number) => void
   onSourceToggle: (source: GameSource) => void
   onFavoritesChange: (v: boolean) => void
@@ -33,6 +35,7 @@ export default function Sidebar({
   tags,
   selectedTags,
   favoriteTags,
+  tagFilterOr,
   filterRating,
   filterSources,
   favoritesOnly,
@@ -42,6 +45,7 @@ export default function Sidebar({
   onTagToggle,
   onClearTags,
   onFavoriteTagToggle,
+  onTagFilterOrChange,
   onRatingChange,
   onSourceToggle,
   onFavoritesChange,
@@ -129,11 +133,23 @@ export default function Sidebar({
       <div className="sidebar-section sidebar-tags-section">
         <div className="sidebar-tag-header">
           <div className="sidebar-label">標籤</div>
-          {selectedTags.length > 0 && (
-            <button className="clear-tags-btn" onClick={onClearTags} title="清除所有標籤選擇">
-              清除 ({selectedTags.length})
-            </button>
-          )}
+          <div className="sidebar-tag-header-right">
+            {selectedTags.length > 1 && (
+              <label className="tag-or-toggle" title="OR 模式：符合任一標籤即顯示">
+                <input
+                  type="checkbox"
+                  checked={tagFilterOr}
+                  onChange={(e) => onTagFilterOrChange(e.target.checked)}
+                />
+                OR
+              </label>
+            )}
+            {selectedTags.length > 0 && (
+              <button className="clear-tags-btn" onClick={onClearTags} title="清除所有標籤選擇">
+                清除 ({selectedTags.length})
+              </button>
+            )}
+          </div>
         </div>
 
         <input

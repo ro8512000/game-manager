@@ -49,6 +49,7 @@ const logDir = join(appRoot, 'logs')
 interface Settings {
   gamesDir: string | null
   leProcPath: string | null
+  fetchDescriptionOnFetch: boolean
 }
 
 function countFiles(dir: string): number {
@@ -118,12 +119,12 @@ function ensureDirs(): void {
 }
 
 function loadSettings(): Settings {
-  if (!existsSync(settingsFile)) return { gamesDir: null, leProcPath: null }
+  if (!existsSync(settingsFile)) return { gamesDir: null, leProcPath: null, fetchDescriptionOnFetch: false }
   try {
     const s = JSON.parse(readFileSync(settingsFile, 'utf-8'))
-    return { gamesDir: s.gamesDir ?? null, leProcPath: s.leProcPath ?? null }
+    return { gamesDir: s.gamesDir ?? null, leProcPath: s.leProcPath ?? null, fetchDescriptionOnFetch: s.fetchDescriptionOnFetch ?? false }
   } catch {
-    return { gamesDir: null, leProcPath: null }
+    return { gamesDir: null, leProcPath: null, fetchDescriptionOnFetch: false }
   }
 }
 
@@ -389,13 +390,6 @@ async function fetchDLsiteInfo(
           const tag = a[1].trim()
           if (tag && tag.length < 50) tags.push(tag)
         }
-      }
-    }
-    // Method 3: user-contributed / review-aggregated tags (wtags section)
-    for (const m of html.matchAll(/class="[^"]*(?:wtags|work_tag|user_tag|review_tag)[^"]*"[^>]*>([\s\S]{0,3000}?)<\/(?:div|ul|section)>/g)) {
-      for (const a of m[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)) {
-        const tag = a[1].trim()
-        if (tag && tag.length < 50 && !tags.includes(tag)) tags.push(tag)
       }
     }
     // Limit total tags
@@ -682,6 +676,7 @@ app.whenReady().then(() => {
         ...g,
         uuid: g.uuid ?? randomUUID(),
         lastPlayedAt: g.lastPlayedAt ?? null,
+        infoUpdatedAt: g.infoUpdatedAt ?? null,
         playCount: g.playCount ?? 0,
         playTime: g.playTime ?? 0,
         releaseDate: g.releaseDate ?? null,
@@ -723,6 +718,45 @@ app.whenReady().then(() => {
     mainWindow?.webContents.send('progress:step', { msg: 'DLsite 資訊抓取中...', pct: 0 })
     const result = await fetchDLsiteInfo(code)
     mainWindow?.webContents.send('progress:step', { msg: result.success ? '✓ 資訊抓取完成' : '⚠ 無法取得資訊', pct: 100 })
+    if (result.success && loadSettings().fetchDescriptionOnFetch) {
+      mainWindow?.webContents.send('progress:step', { msg: '抓取遊戲介紹...', pct: 50 })
+      try {
+        const pageHtml = await fetchHTML(getWorkURL(code))
+        const sections: string[] = []
+        const containerRe = /class="work_parts_container[^"]*"[^>]*>/g
+        let cm: RegExpExecArray | null
+        while ((cm = containerRe.exec(pageHtml)) !== null) {
+          const start = cm.index + cm[0].length
+          let depth = 1; let i = start
+          while (i < pageHtml.length && depth > 0) {
+            const o = pageHtml.indexOf('<div', i); const c = pageHtml.indexOf('</div>', i)
+            if (c === -1) break
+            if (o !== -1 && o < c) { depth++; i = o + 4 }
+            else { depth--; if (depth === 0) { const s = pageHtml.slice(start, c).trim(); if (s) sections.push(s); break }; i = c + 6 }
+          }
+        }
+        if (sections.length > 0) {
+          let raw = sections.join('\n')
+          raw = raw.replace(/<img([^>]*?)\sdata-src="([^"]+)"([^>]*?)>/gi, (_, b, ds, a) => `<img${(b+a).replace(/\s*\bsrc="[^"]*"/i,'')} src="${ds}">`)
+          raw = raw.replace(/<script\b[\s\S]*?<\/script>/gi, '').replace(/<style\b[\s\S]*?<\/style>/gi, '')
+          raw = raw.replace(/\s+class="[^"]*"/gi, '').replace(/<center>/gi, '<div style="text-align:center">').replace(/<\/center>/gi, '</div>')
+          const dir = join(gameImagesDir, code)
+          mkdirSync(dir, { recursive: true })
+          const urlToLocal = new Map<string, string>(); let idx = 0; const seen = new Set<string>()
+          for (const im of raw.matchAll(/\bsrc="([^"]+)"/gi)) {
+            const abs = im[1].startsWith('//') ? `https:${im[1]}` : im[1]
+            if (!abs.startsWith('http') || seen.has(abs)) continue
+            seen.add(abs); idx++
+            const ext = abs.replace(/\?.*$/,'').match(/\.(\w{2,5})$/)?.[1]?.toLowerCase() || 'jpg'
+            const name = `desc_img_${idx}.${ext}`
+            try { await downloadImage(abs, join(dir, name)); urlToLocal.set(abs, name) } catch { /**/ }
+          }
+          const cleaned = raw.replace(/\bsrc="([^"]+)"/gi, (_m, src) => { const abs = src.startsWith('//')?`https:${src}`:src; const l=urlToLocal.get(abs); return l?`src="${l}"`:_m })
+          writeFileSync(join(dir, 'description.html'), cleaned, 'utf-8')
+        }
+      } catch { /**/ }
+      mainWindow?.webContents.send('progress:step', { msg: '✓ 完成', pct: 100 })
+    }
     return result
   })
 
@@ -832,6 +866,114 @@ app.whenReady().then(() => {
 
   ipcMain.handle('games:deleteFile', async (_, filePath: string) => {
     try { await rm(filePath, { force: true }); return true } catch (e) { logError('games:deleteFile', e); return false }
+  })
+
+  // Convert desc_img_*.* references in stored HTML to inline base64 for renderer display
+  function descHtmlToDisplay(html: string, gameId: string): string {
+    return html.replace(/src="(desc_img_[^"]+)"/g, (_m, relPath) => {
+      const abs = join(gameImagesDir, gameId, relPath)
+      if (!existsSync(abs)) return `src=""`
+      try {
+        const buf = readFileSync(abs)
+        const ext = extname(relPath).slice(1).toLowerCase()
+        const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : `image/${ext || 'png'}`
+        return `src="data:${mime};base64,${buf.toString('base64')}"`
+      } catch { return `src=""` }
+    })
+  }
+
+  ipcMain.handle('games:loadDescription', (_, gameId: string): string => {
+    try {
+      const htmlPath = join(gameImagesDir, gameId, 'description.html')
+      if (existsSync(htmlPath)) return descHtmlToDisplay(readFileSync(htmlPath, 'utf-8'), gameId)
+      const txtPath = join(gameImagesDir, gameId, 'description.txt')
+      if (existsSync(txtPath)) return readFileSync(txtPath, 'utf-8')
+      return ''
+    } catch { return '' }
+  })
+
+  ipcMain.handle('games:saveDescription', (_, { gameId, text }: { gameId: string; text: string }): boolean => {
+    try {
+      const dir = join(gameImagesDir, gameId)
+      mkdirSync(dir, { recursive: true })
+      const p = join(dir, 'description.html')
+      if (text.trim()) {
+        writeFileSync(p, text, 'utf-8')
+      } else if (existsSync(p)) {
+        unlinkSync(p)
+      }
+      return true
+    } catch (e) { logError('games:saveDescription', e); return false }
+  })
+
+  ipcMain.handle('games:fetchDLsiteDescription', async (_, code: string) => {
+    try {
+      const url = getWorkURL(code)
+      const pageHtml = await fetchHTML(url)
+
+      // Extract work_parts_container blocks with div-depth counting
+      const sections: string[] = []
+      const containerRe = /class="work_parts_container[^"]*"[^>]*>/g
+      let m: RegExpExecArray | null
+      while ((m = containerRe.exec(pageHtml)) !== null) {
+        const start = m.index + m[0].length
+        let depth = 1; let i = start
+        while (i < pageHtml.length && depth > 0) {
+          const o = pageHtml.indexOf('<div', i)
+          const c = pageHtml.indexOf('</div>', i)
+          if (c === -1) break
+          if (o !== -1 && o < c) { depth++; i = o + 4 }
+          else { depth--; if (depth === 0) { const s = pageHtml.slice(start, c).trim(); if (s) sections.push(s); break }; i = c + 6 }
+        }
+      }
+      if (sections.length === 0) return { success: false, error: '找不到介紹區塊' }
+
+      // ── Clean raw HTML ──────────────────────────────────────────────────────
+      let raw = sections.join('\n')
+      // 1. Normalize lazy-load images: data-src → src
+      raw = raw.replace(/<img([^>]*?)\sdata-src="([^"]+)"([^>]*?)>/gi, (_, before, dataSrc, after) => {
+        const rest = (before + after).replace(/\s*\bsrc="[^"]*"/i, '')
+        return `<img${rest} src="${dataSrc}">`
+      })
+      // 2. Strip scripts/styles
+      raw = raw.replace(/<script\b[\s\S]*?<\/script>/gi, '').replace(/<style\b[\s\S]*?<\/style>/gi, '')
+      // 3. Remove class attributes; convert <center> to div
+      raw = raw.replace(/\s+class="[^"]*"/gi, '').replace(/<center>/gi, '<div style="text-align:center">').replace(/<\/center>/gi, '</div>')
+
+      // ── Download images ─────────────────────────────────────────────────────
+      const dir = join(gameImagesDir, code)
+      mkdirSync(dir, { recursive: true })
+      const urlToLocal = new Map<string, string>()
+      let imgIdx = 0
+      const imgRe = /\bsrc="([^"]+)"/gi
+      const seenUrls = new Set<string>()
+      for (const im of raw.matchAll(imgRe)) {
+        const src = im[1]
+        const abs = src.startsWith('//') ? `https:${src}` : src
+        if (!abs.startsWith('http') || seenUrls.has(abs)) continue
+        seenUrls.add(abs)
+        imgIdx++
+        const ext = src.replace(/\?.*$/, '').match(/\.(\w{2,5})$/)?.[1]?.toLowerCase() || 'jpg'
+        const localName = `desc_img_${imgIdx}.${ext}`
+        const localPath = join(dir, localName)
+        try {
+          await downloadImage(abs, localPath)
+          urlToLocal.set(abs, localName)
+        } catch { /* keep original */ }
+      }
+
+      // ── Replace image URLs with local filenames ─────────────────────────────
+      let cleaned = raw.replace(/\bsrc="([^"]+)"/gi, (match, src) => {
+        const abs = src.startsWith('//') ? `https:${src}` : src
+        const local = urlToLocal.get(abs)
+        return local ? `src="${local}"` : match
+      })
+
+      writeFileSync(join(dir, 'description.html'), cleaned, 'utf-8')
+      return { success: true, description: descHtmlToDisplay(cleaned, code) }
+    } catch (e) {
+      return { success: false, error: String(e) }
+    }
   })
 
   ipcMain.handle('shell:openExternal', (_, url: string) => {

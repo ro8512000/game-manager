@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { Game } from '../types'
+import { localDateTime } from '../utils'
 
 interface Props {
   games: Game[]          // filtered DLsite games to re-fetch
@@ -44,7 +45,7 @@ export default function BatchFetchModal({ games, onUpdate, onClose }: Props): Re
             ...game,
             title: (d.title as string) || game.title,
             circle: (d.circle as string) || game.circle,
-            tags: (d.tags as string[]) || game.tags,
+            tags: (d.tags as string[])?.length > 0 ? (d.tags as string[]) : game.tags,
             cover: (d.localCover as string) || game.cover,
             listImage: (d.localListImage as string) || game.listImage,
             coverUrl: (d.coverUrl as string) || game.coverUrl,
@@ -52,6 +53,7 @@ export default function BatchFetchModal({ games, onUpdate, onClose }: Props): Re
             releaseDate: (d.releaseDate as string) || game.releaseDate,
             workType: (d.workType as string) || game.workType,
             dlsiteRating: (d.dlsiteRating as string) || game.dlsiteRating,
+            infoUpdatedAt: localDateTime(),
           })
           ok++
         } else {
