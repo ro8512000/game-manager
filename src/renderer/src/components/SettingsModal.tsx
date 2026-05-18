@@ -11,6 +11,9 @@ export default function SettingsModal({ settings, onSave, onClose }: Props): Rea
   const [gamesDir, setGamesDir] = useState(settings.gamesDir || '')
   const [leProcPath, setLeProcPath] = useState(settings.leProcPath || '')
   const [fetchDescriptionOnFetch, setFetchDescriptionOnFetch] = useState(settings.fetchDescriptionOnFetch ?? false)
+  const [sakuraApiUrl, setSakuraApiUrl] = useState(settings.sakuraApiUrl || '')
+  const [translationTargetLang, setTranslationTargetLang] = useState(settings.translationTargetLang || 'zh-TW')
+  const [autoTranslateOnFetch, setAutoTranslateOnFetch] = useState(settings.autoTranslateOnFetch ?? false)
   const [locationInfo, setLocationInfo] = useState<DataLocationInfo | null>(null)
   const [migrating, setMigrating] = useState(false)
   const [migrateProgress, setMigrateProgress] = useState<{ msg: string; pct: number } | null>(null)
@@ -31,7 +34,7 @@ export default function SettingsModal({ settings, onSave, onClose }: Props): Rea
   }
 
   const handleSave = async (): Promise<void> => {
-    await onSave({ gamesDir: gamesDir.trim() || null, leProcPath: leProcPath.trim() || null, fetchDescriptionOnFetch })
+    await onSave({ gamesDir: gamesDir.trim() || null, leProcPath: leProcPath.trim() || null, fetchDescriptionOnFetch, sakuraApiUrl: sakuraApiUrl.trim() || null, translationTargetLang, autoTranslateOnFetch })
     onClose()
   }
 
@@ -110,6 +113,43 @@ export default function SettingsModal({ settings, onSave, onClose }: Props): Rea
             </label>
             <div className="settings-hint">
               開啟後，每次重新抓取 DLsite 遊戲資訊時，也會自動抓取並儲存遊戲介紹頁面內容（含圖片）。
+            </div>
+          </div>
+
+          <div className="settings-section">
+            <div className="settings-label">Sakura 翻譯模型</div>
+            <div className="form-row">
+              <input
+                value={sakuraApiUrl}
+                onChange={(e) => setSakuraApiUrl(e.target.value)}
+                placeholder="http://localhost:8080"
+              />
+            </div>
+            <div className="settings-hint">
+              Sakura 本地翻譯模型的 API 地址（OpenAI 相容格式）。留空則停用翻譯功能。
+            </div>
+            <div className="settings-row-inline">
+              <span className="settings-inline-label">翻譯目標語言</span>
+              <select
+                className="locale-select"
+                value={translationTargetLang}
+                onChange={(e) => setTranslationTargetLang(e.target.value)}
+              >
+                <option value="zh-TW">繁體中文</option>
+                <option value="zh-CN">簡體中文</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+            <label className="settings-checkbox-row">
+              <input
+                type="checkbox"
+                checked={autoTranslateOnFetch}
+                onChange={(e) => setAutoTranslateOnFetch(e.target.checked)}
+              />
+              抓取遊戲介紹後自動翻譯
+            </label>
+            <div className="settings-hint">
+              開啟後，每次抓取 DLsite 遊戲介紹時，會自動呼叫 Sakura 模型翻譯並儲存。
             </div>
           </div>
 

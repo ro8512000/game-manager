@@ -23,6 +23,9 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import iconv from 'iconv-lite'
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const initSqlJs = require('sql.js') as (opts: { wasmBinary: Buffer }) => Promise<{ Database: new (data: Buffer) => { exec: (sql: string) => { columns: string[]; values: unknown[][] }[] } }>
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { Converter: OpenCCConverter } = require('opencc-js') as { Converter: (opts: { from: string; to: string }) => (text: string) => string }
+const convertToTW = OpenCCConverter({ from: 'cn', to: 'tw' })
 
 import icon from '../../resources/icon.png?asset'
 
@@ -50,6 +53,9 @@ interface Settings {
   gamesDir: string | null
   leProcPath: string | null
   fetchDescriptionOnFetch: boolean
+  sakuraApiUrl: string | null
+  translationTargetLang: string
+  autoTranslateOnFetch: boolean
 }
 
 function countFiles(dir: string): number {
@@ -119,12 +125,20 @@ function ensureDirs(): void {
 }
 
 function loadSettings(): Settings {
-  if (!existsSync(settingsFile)) return { gamesDir: null, leProcPath: null, fetchDescriptionOnFetch: false }
+  const defaults: Settings = { gamesDir: null, leProcPath: null, fetchDescriptionOnFetch: false, sakuraApiUrl: null, translationTargetLang: 'zh-TW', autoTranslateOnFetch: false }
+  if (!existsSync(settingsFile)) return defaults
   try {
     const s = JSON.parse(readFileSync(settingsFile, 'utf-8'))
-    return { gamesDir: s.gamesDir ?? null, leProcPath: s.leProcPath ?? null, fetchDescriptionOnFetch: s.fetchDescriptionOnFetch ?? false }
+    return {
+      gamesDir: s.gamesDir ?? null,
+      leProcPath: s.leProcPath ?? null,
+      fetchDescriptionOnFetch: s.fetchDescriptionOnFetch ?? false,
+      sakuraApiUrl: s.sakuraApiUrl ?? null,
+      translationTargetLang: s.translationTargetLang ?? 'zh-TW',
+      autoTranslateOnFetch: s.autoTranslateOnFetch ?? false
+    }
   } catch {
-    return { gamesDir: null, leProcPath: null, fetchDescriptionOnFetch: false }
+    return defaults
   }
 }
 
@@ -200,6 +214,58 @@ function copyDirSync(src: string, dest: string): void {
     if (entry.isDirectory()) copyDirSync(s, d)
     else if (entry.isFile()) copyFileSync(s, d)
   }
+}
+
+
+async function callSakuraApi(text: string, targetLang: string, apiUrl: string): Promise<string> {
+  const isEn = targetLang === 'en'
+  const systemPrompt = isEn
+    ? 'You are a professional translator. Translate the Japanese text to English naturally and accurately.'
+    : '你是一个轻小说翻译模型，可以流畅通顺地以日本轻小说的风格将日文翻译成简体中文，并联系上下文正确使用人称代词，不擅自添加原文中没有的代词。'
+  const userPrompt = isEn
+    ? `Translate to English:\n${text}`
+    : `将下面的日文文本翻译成简体中文：\n${text}`
+  const base = apiUrl.replace(/\/$/, '')
+  const res = await fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'sukinishiro',
+      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+      temperature: 0.1,
+      max_tokens: 1024,
+      stream: false
+    })
+  })
+  if (!res.ok) throw new Error(`Sakura API ${res.status} ${res.statusText}`)
+  const json = await res.json() as { choices: { message: { content: string } }[] }
+  let result = json.choices[0]?.message?.content?.trim() ?? ''
+  // Sakura outputs Simplified Chinese; post-process to Traditional via OpenCC
+  if (targetLang === 'zh-TW' && result) result = convertToTW(result)
+  return result
+}
+
+async function translateDescriptionHtml(html: string, gameId: string, targetLang: string, apiUrl: string): Promise<string> {
+  const uniqueTexts = new Set<string>()
+  for (const m of html.matchAll(/>([^<]+)</g)) {
+    const t = m[1].trim()
+    if (t.length > 2) uniqueTexts.add(t)
+  }
+  if (uniqueTexts.size === 0) return html
+  const translationMap = new Map<string, string>()
+  for (const text of uniqueTexts) {
+    try { translationMap.set(text, await callSakuraApi(text, targetLang, apiUrl)) }
+    catch { translationMap.set(text, text) }
+  }
+  const translatedHtml = html.replace(/>([^<]+)</g, (match, text) => {
+    const trimmed = text.trim()
+    if (!trimmed || trimmed.length <= 2) return match
+    const tr = translationMap.get(trimmed)
+    if (!tr) return match
+    return '>' + (text.match(/^\s*/)?.[0] ?? '') + tr + (text.match(/\s*$/)?.[0] ?? '') + '<'
+  })
+  writeFileSync(join(gameImagesDir, gameId, 'description.html'), translatedHtml, 'utf-8')
+  return translatedHtml
 }
 
 // Move a directory; falls back to manual copy+delete for cross-drive moves
@@ -753,6 +819,11 @@ app.whenReady().then(() => {
           }
           const cleaned = raw.replace(/\bsrc="([^"]+)"/gi, (_m, src) => { const abs = src.startsWith('//')?`https:${src}`:src; const l=urlToLocal.get(abs); return l?`src="${l}"`:_m })
           writeFileSync(join(dir, 'description.html'), cleaned, 'utf-8')
+          const s = loadSettings()
+          if (s.sakuraApiUrl && s.autoTranslateOnFetch) {
+            mainWindow?.webContents.send('progress:step', { msg: '翻譯介紹中...', pct: 75 })
+            try { await translateDescriptionHtml(cleaned, code, s.translationTargetLang, s.sakuraApiUrl) } catch { /**/ }
+          }
         }
       } catch { /**/ }
       mainWindow?.webContents.send('progress:step', { msg: '✓ 完成', pct: 100 })
@@ -972,6 +1043,28 @@ app.whenReady().then(() => {
       writeFileSync(join(dir, 'description.html'), cleaned, 'utf-8')
       return { success: true, description: descHtmlToDisplay(cleaned, code) }
     } catch (e) {
+      return { success: false, error: String(e) }
+    }
+  })
+
+  ipcMain.handle('games:loadTranslatedDescription', (_, gameId: string): string => {
+    try {
+      const p = join(gameImagesDir, gameId, 'description_translated.txt')
+      return existsSync(p) ? readFileSync(p, 'utf-8') : ''
+    } catch { return '' }
+  })
+
+  ipcMain.handle('games:translateDescription', async (_, gameId: string) => {
+    try {
+      const settings = loadSettings()
+      if (!settings.sakuraApiUrl) return { success: false, error: '未設定 Sakura API URL' }
+      const htmlPath = join(gameImagesDir, gameId, 'description.html')
+      if (!existsSync(htmlPath)) return { success: false, error: '無介紹資料可翻譯' }
+      const html = readFileSync(htmlPath, 'utf-8')
+      const translatedHtml = await translateDescriptionHtml(html, gameId, settings.translationTargetLang, settings.sakuraApiUrl)
+      return { success: true, description: descHtmlToDisplay(translatedHtml, gameId) }
+    } catch (e) {
+      logError('games:translateDescription', e)
       return { success: false, error: String(e) }
     }
   })

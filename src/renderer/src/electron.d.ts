@@ -4,6 +4,9 @@ export interface Settings {
   gamesDir: string | null
   leProcPath: string | null
   fetchDescriptionOnFetch: boolean
+  sakuraApiUrl: string | null
+  translationTargetLang: string
+  autoTranslateOnFetch: boolean
 }
 
 export interface PreviewMoveResult {
@@ -73,6 +76,8 @@ interface ElectronAPI {
   loadDescription: (gameId: string) => Promise<string>
   saveDescription: (gameId: string, text: string) => Promise<boolean>
   fetchDLsiteDescription: (code: string) => Promise<{ success: boolean; description?: string; error?: string }>
+  loadTranslatedDescription: (gameId: string) => Promise<string>
+  translateDescription: (gameId: string) => Promise<{ success: boolean; description?: string; error?: string }>
   selectImportDb: () => Promise<string | null>
   importPreview: (dbPath: string) => Promise<{ success: boolean; count?: number; error?: string }>
   importRun: (args: { dbPath: string; skipDuplicates: boolean; existingIds: string[] }) => Promise<{ success: boolean; imported: Record<string, unknown>[]; skipped: number; errors: string[]; error?: string }>

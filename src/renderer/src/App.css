@@ -447,6 +447,10 @@ body {
 .detail-desc-html li { margin: 3px 0; }
 .detail-desc-html table { border-collapse: collapse; width: 100%; margin: 8px 0; }
 .detail-desc-html td, .detail-desc-html th { padding: 4px 8px; vertical-align: top; }
+.detail-desc-translated { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 14px; font-size: 13px; line-height: 1.8; color: var(--text); max-height: 500px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+.btn-save-desc.active { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg3)); }
+.settings-row-inline { display: flex; align-items: center; gap: 8px; }
+.settings-inline-label { font-size: 13px; color: var(--text); white-space: nowrap; flex-shrink: 0; }
 .btn-save {
   background: var(--accent);
   color: white;

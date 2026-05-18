@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadDescription: (gameId: string) => ipcRenderer.invoke('games:loadDescription', gameId),
   saveDescription: (gameId: string, text: string) => ipcRenderer.invoke('games:saveDescription', { gameId, text }),
   fetchDLsiteDescription: (code: string) => ipcRenderer.invoke('games:fetchDLsiteDescription', code),
+  loadTranslatedDescription: (gameId: string) => ipcRenderer.invoke('games:loadTranslatedDescription', gameId),
+  translateDescription: (gameId: string) => ipcRenderer.invoke('games:translateDescription', gameId),
 
   // Import from old version
   selectImportDb: () => ipcRenderer.invoke('import:selectDb'),

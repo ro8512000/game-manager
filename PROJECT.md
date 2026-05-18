@@ -110,11 +110,14 @@ interface Game {
 
 ### settings.json
 ```json
-{ "gamesDir": "G:/Games", "leProcPath": "C:/LEd/LEProc.exe", "fetchDescriptionOnFetch": false }
+{ "gamesDir": "G:/Games", "leProcPath": "C:/LEd/LEProc.exe", "fetchDescriptionOnFetch": false, "sakuraApiUrl": "http://localhost:8080", "translationTargetLang": "zh-TW", "autoTranslateOnFetch": false }
 ```
 - `gamesDir`：新增遊戲時，遊戲資料夾移動/解壓縮的目標目錄
 - `leProcPath`：Locale Emulator 的 `LEProc.exe` 路徑；設定後可對個別遊戲啟用 LE 啟動
 - `fetchDescriptionOnFetch`（預設 `false`）：每次重新抓取 DLsite 遊戲資訊時，也自動抓取遊戲介紹 HTML 並儲存
+- `sakuraApiUrl`（預設 `null`）：Sakura 本地翻譯模型 API 地址（OpenAI 相容）；留空則停用翻譯功能
+- `translationTargetLang`（預設 `'zh-TW'`）：翻譯目標語言；支援 `zh-TW`/`zh-CN`/`en`
+- `autoTranslateOnFetch`（預設 `false`）：抓取 DLsite 介紹後自動呼叫 Sakura 翻譯
 
 ### ui-settings.json
 所有 UI 狀態存此檔（不用 localStorage，避免 dev server port 變動造成重置）：
@@ -153,7 +156,7 @@ interface Game {
 |------|------|
 | `games:load` | 讀取 games.json（自動補缺少欄位、展開圖片相對路徑） |
 | `games:save` | 儲存 games.json（壓縮圖片路徑為相對路徑） |
-| `games:fetchInfo(code)` | DLsite 抓取（日文）：標題/社團/tag/評分/發售日/圖片（含 sam.jpg） |
+| `games:fetchInfo(code)` | DLsite 抓取（日文）：標題/社團/tag/評分/發售日/圖片（含 sam.jpg）；若 `fetchDescriptionOnFetch=true` 同時抓遊戲介紹並存 description.html；若 `sakuraApiUrl` + `autoTranslateOnFetch` 也同時翻譯（呼叫 `translateDescriptionHtml()`） |
 | `games:fetchSteamInfo(appId)` | Steam API 抓取：標題/開發商/tag/發售日/截圖 |
 | `games:fetchGetchuInfo(id)` | Getchu 抓取：標題/社團/發售日/封面+樣本圖（JSON-LD 解析；年齢認証用 `?gc=gc` 繞過） |
 | `games:suggestFetchDlsite(term)` | 用遊戲名稱查詢 DLsite suggest API → 取第一個 RJ/VJ/BJ 代碼 → 自動抓取並回傳 DLsite 資訊；找不到時回傳 `{success:false, error:'沒有查詢結果'}` |
@@ -174,6 +177,8 @@ interface Game {
 | `games:loadDescription(gameId)` | 讀取 `game-images/{id}/description.html`（desc_img_*.* 圖片轉 base64 inline）；無則讀 `.txt`；找不到回傳空字串 |
 | `games:saveDescription({gameId, text})` | 寫入 `game-images/{id}/description.html`；text 為空則刪除檔案 |
 | `games:fetchDLsiteDescription(code)` | 抓取 DLsite 介紹 HTML、處理 lazy-load/class/script、下載圖片為 `desc_img_{n}.ext`、存 `description.html`，回傳帶 base64 圖片的 display HTML |
+| `games:loadTranslatedDescription(gameId)` | 讀取 `game-images/{id}/description_translated.txt`（保留向下相容，目前前端未使用） |
+| `games:translateDescription(gameId)` | 讀取 settings（sakuraApiUrl/translationTargetLang）→ 萃取 description.html 的文字節點 → 逐節點送 Sakura API → 替換回 HTML 結構（圖片 tag 保留）→ **覆寫** description.html → 回傳 `{success, description?}` 含 base64 圖片的 display HTML |
 
 ### 檔案選擇
 | 通道 | 說明 |
@@ -357,6 +362,11 @@ interface Game {
 - **🖼 圖片資料夾**：有本地圖片時顯示，開啟存放圖片的資料夾
 - ⚙ 啟動檔案設定、**啟動語系**下拉選單（Locale Emulator）、備注編輯 + 儲存
 - 統計：發售日、DLsite 評分、加入時間、遊玩次數、遊玩時間、上次遊玩、磁碟大小（含 ↻）
+- **遊戲介紹**：DLsite 介紹 HTML（含圖片）+ 抓取/清除按鈕；**↻ 重新抓取資訊時同時重新抓取介紹**（DLsite 遊戲）
+- **翻譯介紹**（設定了 `sakuraApiUrl` 且有介紹時顯示）：呼叫 Sakura API 翻譯文字節點，覆寫 description.html（保留圖片結構），display 直接更新
+  - 翻譯架構：Sakura 一律輸出簡體 → zh-TW 時用 opencc-js 做簡→繁轉換（post-process）
+  - `autoTranslateOnFetch` 開啟時，抓取介紹後自動翻譯
+- **⚠ `prevUuidRef` 必須 `useRef('')` 初始化**，不可用 `useRef(game.uuid)`；否則第一次 mount 時 `uuidChanged=false`，loadDescription 不呼叫
 
 ### 右鍵選單（GameContextMenu）
 - 開啟遊戲 / DLsite 頁面 / Steam 頁面 / Getchu 頁面 / 開啟遊戲資料夾
@@ -381,6 +391,7 @@ interface Game {
 ### BatchFetchModal（批量更新）
 - 工具列「↻ 批量更新 (N)」按鈕（列表中有 DLsite 遊戲時顯示）
 - 依序抓取，整體進度 + 單筆進度，可中途停止
+- 呼叫 `games:fetchInfo`，主程式端自動處理介紹抓取（`fetchDescriptionOnFetch`）與翻譯（`autoTranslateOnFetch`）
 
 ### ScanFolderModal（掃描資料夾）
 - 標題列「掃描資料夾」按鈕開啟
@@ -402,6 +413,11 @@ interface Game {
 ### SettingsModal（設定）
 - 選擇 `gamesDir`（遊戲儲存目錄）
 - 選擇 `leProcPath`（LEProc.exe 路徑），用於 Locale Emulator 啟動
+- **抓取設定**：`fetchDescriptionOnFetch` checkbox
+- **Sakura 翻譯模型**：
+  - `sakuraApiUrl`：本地 Sakura API 地址（如 `http://localhost:8080`），留空停用翻譯
+  - `translationTargetLang`：翻譯目標語言（繁體中文 / 簡體中文 / English）
+  - `autoTranslateOnFetch`：抓取介紹後自動翻譯 checkbox
 - **資料儲存位置**：顯示當前模式 badge（攜帶式/AppData）和路徑，提供一鍵搬移按鈕（附進度條）
 
 ---
@@ -430,7 +446,7 @@ interface Game {
 12. **Locale Emulator**：`leProcPath` 為空或 `launchLocale` 為 null 時正常啟動，不呼叫 LE；LE 不支援的語系直接在 select 選項控制，不需額外判斷。
 13. **Getchu 年齢認証**：URL 加 `?gc=gc` 即可直接繞過，伺服器回傳 `getchu_adalt_flag=getchu.com` cookie 並直接給商品頁。不需要複雜的 cookie 流程。
 14. **Getchu 圖片 403**：圖片伺服器要求 `Referer: https://www.getchu.com/`，缺少會 403；DLsite 的 `Cookie: locale=zh_TW` 送給 Getchu 也會 403，兩者不可混用。`downloadImage` 函數簽名：`(url, dest, redirectCount=0, cookie='locale=zh_TW', referer='')`，Getchu 呼叫時傳 `cookie=''、referer='https://www.getchu.com/'`。
-15. **dev 模式資料路徑**：優先讀取 `GAME_DATA_ROOT` 環境變數（`.env*.local` 設定，已加入 .gitignore）；`.env.local` 指向 AppData（測試環境），`.env.prod.local` 指向 `G:/GameManager`（正式環境），用 `npm run dev:prod` 切換。
+15. **dev 模式資料路徑**：優先讀取 `GAME_DATA_ROOT` 環境變數（`.env*.local` 設定，已加入 .gitignore）；`.env.local` 與 `.env.prod.local` 皆指向 `G:/GameManager`（正式資料）。測試環境（AppData）需手動覆蓋：`$env:GAME_DATA_ROOT="C:\Users\ro851\AppData\Roaming\dlsite-manager-v2"; npm run dev`
 16. **log 路徑**：`logDir` 只在 `logError()` 被觸發時才建立，沒有錯誤就不會有 log 目錄。dev 模式下 log 位於 `{GAME_DATA_ROOT}/logs/`。
 17. **DLsite suggest API**：回傳格式為 `cb({"work":[{"workno":"RJ...","work_name":"...","maker_name":"..."}]})` 的 JSONP；解析時不依賴 callback 名稱，直接找第一個 `(` 和最後一個 `)` 取 JSON 內容。
 18. **Getchu 搜尋 URL 編碼**：Getchu 服務器按 EUC-JP 解讀 query string，UTF-8 的 `encodeURIComponent` 會造成亂碼；須用 `iconv-lite` 將關鍵字轉 EUC-JP bytes 再逐 byte percent-encode。
@@ -438,15 +454,20 @@ interface Game {
 20. **列表排序順序**：排序在 `App.tsx` 用 `sortListGames()`（`utils.ts`）完成後再分頁，確保跨頁排序正確；`GameList` 的 `sortKey`/`sortDir` 是受控 props，點擊欄位標題呼叫 `onSortChange` 回調。
 21. **launchGame 語系**：`launchGame` 呼叫時帶 `locale: game.launchLocale ?? undefined`，主程式判斷是否用 Locale Emulator 啟動；任何入口（雙擊、Enter、右鍵選單）皆生效。
 22. **磁磚版面**：`.game-card` 不可加 `overflow: hidden`（會導致高度計算為 0，圖片不顯示）；`.card-cover` 使用 `padding-bottom: 56.25%` + absolute 定位取代 `aspect-ratio`；`.content` 使用 `display: grid; grid-template-rows: auto 1fr auto` 確保中間區域正確佔滿剩餘高度。
-23. **Build 大小**：`@electron-toolkit/*`、`@tanstack/react-virtual` 在 devDependencies（vite bundle）；`sql.js`、`7zip-bin` 在 dependencies（需要 runtime 檔案）；`electron-builder.yml` 只打包 `sql.js/dist/**` 和 `7zip-bin/win/x64/7za.exe`；壓縮後約 131MB。
+23. **Build 大小**：`@electron-toolkit/*`、`@tanstack/react-virtual` 在 devDependencies（vite bundle）；`sql.js`、`7zip-bin`、`opencc-js` 在 dependencies（需要 runtime 檔案）；`electron-builder.yml` 只打包 `sql.js/dist/**` 和 `7zip-bin/win/x64/7za.exe`；壓縮後約 131MB。
+24. **Sakura 翻譯架構**：Sakura 模型訓練資料以簡體中文為主，prompt 無法強制輸出繁體。正確做法：一律用簡體 prompt 翻譯 → `zh-TW` 時用 `opencc-js` Converter(`{from:'cn', to:'tw'}`) 做 post-process。`callSakuraApi()` 已內含此邏輯。
+25. **翻譯 in-place**：`translateDescriptionHtml()` 是主程式端的共用函數（module level），萃取 HTML 文字節點（`/>([^<]+)</g`）→ 逐節點翻譯 → 替換回 HTML → 覆寫 `description.html`；`games:fetchInfo` 和 `games:translateDescription` 都呼叫此函數，確保行為一致。
+26. **prevUuidRef bug**：`GameDetail` 的 `prevUuidRef = useRef('')`（不可用 `useRef(game.uuid)`）；用 game.uuid 初始化時，第一次 mount `uuidChanged=false`，導致 `loadDescription` 不被呼叫，介紹無法顯示。
 
 ---
 
 ## 指令
 
 ```bash
-npm run dev          # 開發模式，讀取 AppData 資料（.env.local）
-npm run dev:prod     # 開發模式，讀取 G:\GameManager 資料（.env.prod.local）
+npm run dev          # 開發模式，讀取正式資料（G:\GameManager，.env.local）
 npm run typecheck    # TypeScript 型別檢查
 npm run build:win    # 建置 Windows zip（不產出安裝檔）
+
+# 測試環境（AppData）
+$env:GAME_DATA_ROOT="C:\Users\ro851\AppData\Roaming\dlsite-manager-v2"; npm run dev
 ```

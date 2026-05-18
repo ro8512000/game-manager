@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import type { Game } from '../types'
+import type { Settings } from '../electron.d'
 import { localDateTime, formatPlayTime, formatFileSize } from '../utils'
 import ImageLightbox from './ImageLightbox'
 
 interface Props {
   game: Game
+  settings: Settings
   onUpdate: (game: Game) => void
   onDelete: (id: string) => void
   onClose: () => void
@@ -18,13 +20,14 @@ function getDLsiteUrl(id: string): string {
   return `https://www.dlsite.com/maniax/work/=/product_id/${id}.html`
 }
 
-export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilterTag, allTags }: Props): React.JSX.Element {
+export default function GameDetail({ game, settings, onUpdate, onDelete, onClose, onFilterTag, allTags }: Props): React.JSX.Element {
   const [imgSrcs, setImgSrcs] = useState<(string | null)[]>([])
   const [activeIdx, setActiveIdx] = useState(0)
   const [note, setNote] = useState(game.note)
   const [description, setDescription] = useState('')
   const [descLoaded, setDescLoaded] = useState(false)
   const [fetchingDesc, setFetchingDesc] = useState(false)
+  const [translating, setTranslating] = useState(false)
   const [rating, setRating] = useState(game.rating)
   const [editableTags, setEditableTags] = useState<string[]>(game.tags)
   const [editingTitle, setEditingTitle] = useState(false)
@@ -41,7 +44,7 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [lightboxIdx, setLightboxIdx] = useState(0)
   const [imgEditMode, setImgEditMode] = useState(false)
-  const prevUuidRef = useRef(game.uuid)
+  const prevUuidRef = useRef('')
 
   useEffect(() => {
     const uuidChanged = game.uuid !== prevUuidRef.current
@@ -147,6 +150,22 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
         dlsiteRating: (d.dlsiteRating as string) || game.dlsiteRating,
         infoUpdatedAt: localDateTime(),
       })
+      // Re-fetch description for DLsite games
+      if (isRJ) {
+        setFetchingDesc(true)
+        const descResult = await window.electronAPI.fetchDLsiteDescription(game.id)
+        if (descResult.success && descResult.description) {
+          setDescription(descResult.description)
+          setDescLoaded(true)
+          if (settings.sakuraApiUrl && settings.autoTranslateOnFetch) {
+            setTranslating(true)
+            const tResult = await window.electronAPI.translateDescription(game.id)
+            if (tResult.success && tResult.description) setDescription(tResult.description)
+            setTranslating(false)
+          }
+        }
+        setFetchingDesc(false)
+      }
     }
     setRefetching(false)
   }
@@ -287,8 +306,22 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
     const result = await window.electronAPI.fetchDLsiteDescription(game.id)
     if (result.success && result.description) {
       setDescription(result.description)
+      if (settings.autoTranslateOnFetch && settings.sakuraApiUrl) {
+        setTranslating(true)
+        const tResult = await window.electronAPI.translateDescription(game.id)
+        if (tResult.success && tResult.description) setDescription(tResult.description)
+        setTranslating(false)
+      }
     }
     setFetchingDesc(false)
+  }
+
+  const handleTranslateDescription = async (): Promise<void> => {
+    if (translating) return
+    setTranslating(true)
+    const result = await window.electronAPI.translateDescription(game.id)
+    if (result.success && result.description) setDescription(result.description)
+    setTranslating(false)
   }
 
   const handleConfirmDelete = async (): Promise<void> => {
@@ -551,11 +584,20 @@ export default function GameDetail({ game, onUpdate, onDelete, onClose, onFilter
           <div className="detail-desc-header">
             <span className="detail-desc-label">遊戲介紹</span>
             <div className="detail-desc-actions">
+              {settings.sakuraApiUrl && description && (
+                <button
+                  className="btn-save-desc"
+                  onClick={handleTranslateDescription}
+                  disabled={translating || !descLoaded}
+                >
+                  {translating ? '翻譯中...' : '翻譯介紹'}
+                </button>
+              )}
               {/^[RVB]J\d{6,8}$/i.test(game.id) && (
                 <button
                   className="btn-save-desc"
                   onClick={handleFetchDescription}
-                  disabled={!descLoaded || fetchingDesc}
+                  disabled={!descLoaded || fetchingDesc || translating}
                 >
                   {fetchingDesc ? '抓取中...' : description ? '重新抓取' : '從 DLsite 抓取'}
                 </button>

@@ -20,7 +20,7 @@ type InitialFile = { path: string; type: 'exe' | 'archive'; code: string | null 
 
 export default function App(): React.JSX.Element {
   const [data, setData] = useState<GamesData>({ games: [] })
-  const [settings, setSettings] = useState<Settings>({ gamesDir: null, leProcPath: null, fetchDescriptionOnFetch: false })
+  const [settings, setSettings] = useState<Settings>({ gamesDir: null, leProcPath: null, fetchDescriptionOnFetch: false, sakuraApiUrl: null, translationTargetLang: 'zh-TW', autoTranslateOnFetch: false })
   const [selected, setSelected] = useState<Game | null>(null)
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
   const [initColWidths, setInitColWidths] = useState<Record<string, number>>({})
@@ -528,6 +528,7 @@ export default function App(): React.JSX.Element {
             <div className="detail-resize-bar" onMouseDown={startPanelResize} />
             <GameDetail
               game={selected}
+              settings={settings}
               onUpdate={updateGame}
               onDelete={deleteGame}
               onClose={() => setSelected(null)}
