@@ -416,58 +416,129 @@ function downloadImage(url: string, dest: string, redirectCount = 0, cookie = 'l
   })
 }
 
-function getWorkURL(code: string): string {
+function getWorkURL(code: string, siteId?: string): string {
+  if (siteId && siteId !== 'maniax') {
+    return `https://www.dlsite.com/${siteId}/work/=/product_id/${code}.html`
+  }
   if (code.startsWith('VJ')) return `https://www.dlsite.com/home/work/=/product_id/${code}.html`
   if (code.startsWith('BJ')) return `https://www.dlsite.com/boys-love/work/=/product_id/${code}.html`
   return `https://www.dlsite.com/maniax/work/=/product_id/${code}.html`
+}
+
+async function fetchDLsiteProductAPI(code: string): Promise<Record<string, unknown> | null> {
+  try {
+    const url = `https://www.dlsite.com/maniax/product/info/ajax?product_id=${code}&lang=ja_JP`
+    const raw = await fetchHTML(url)
+    const json = JSON.parse(raw)
+    // API returns { "RJ12345": {...} } format
+    return (json[code] ?? json[code.toUpperCase()] ?? json) as Record<string, unknown>
+  } catch {
+    return null
+  }
 }
 
 async function fetchDLsiteInfo(
   code: string
 ): Promise<{ success: boolean; data?: Record<string, unknown>; error?: string }> {
   try {
-    const url = getWorkURL(code)
+    // Pre-fetch product API to get correct site_id, clean title, and fallback data
+    const apiData = await fetchDLsiteProductAPI(code)
+    const siteId = typeof apiData?.site_id === 'string' ? apiData.site_id : undefined
+
+    const url = getWorkURL(code, siteId)
     const html = await fetchHTML(url)
 
-    const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/)
-    let title = titleMatch ? titleMatch[1] : code
-    title = title.replace(/\s*[|｜]\s*DLsite.*$/, '').replace(/\s*\[[^\]]*\]\s*$/, '').trim()
+    // Detect if the fetched HTML is the actual work page.
+    // DLsite redirects non-JP IPs to its homepage for some site types (e.g. AIX).
+    // Use 'work_outline' (the product info table ID) as the indicator — it only
+    // exists on work detail pages, not on the homepage or ranking pages.
+    const isWorkPage = html.includes('work_outline')
 
-    const coverMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/)
-    const coverUrl = coverMatch ? coverMatch[1] : null
+    // ── Title ────────────────────────────────────────────────────────────
+    // API work_name is always clean (no sale badges). Use it as primary source.
+    let title: string
+    const apiTitle = typeof apiData?.work_name === 'string' ? apiData.work_name : ''
+    if (apiTitle) {
+      title = apiTitle
+    } else if (isWorkPage) {
+      const titleMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/)
+      title = titleMatch ? titleMatch[1] : code
+      title = title
+        .replace(/^【[^】]*?%OFF[^】]*?】\s*/g, '')  // strip sale badges like 【50%OFF】
+        .replace(/\s*[|｜]\s*DLsite.*$/, '')
+        .replace(/\s*\[[^\]]*\]\s*$/, '')
+        .trim()
+    } else {
+      title = code
+    }
 
-    const circleMatch = html.match(/class="maker_name"[^>]*>[^<]*<a[^>]*>([^<]+)<\/a>/)
-    const circle = circleMatch ? circleMatch[1].trim() : ''
+    // ── Cover image ──────────────────────────────────────────────────────
+    // Only use og:image from HTML if it's actually the work page
+    const apiCoverUrl = typeof apiData?.image_main === 'string' ? apiData.image_main : null
+    let coverUrl: string | null = apiCoverUrl
+    if (isWorkPage) {
+      const coverMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/)
+      if (coverMatch) coverUrl = coverMatch[1]
+    }
+
+    // ── Circle / maker ───────────────────────────────────────────────────
+    // Use maker_id from API to find the exact circle link; fall back to
+    // fetching the circle profile page directly (works even for restricted pages).
+    const makerId = typeof apiData?.maker_id === 'string' ? apiData.maker_id : null
+    let circle = ''
+    if (makerId) {
+      const makerMatch = isWorkPage
+        ? html.match(new RegExp(`maker_id\\/${makerId}[^"]*"[^>]*>([^<]+)<\\/a>`))
+        : null
+      if (makerMatch) {
+        circle = makerMatch[1].trim()
+      } else {
+        // Work page is restricted or geo-blocked — fetch circle profile page directly
+        try {
+          const profileHtml = await fetchHTML(`https://www.dlsite.com/maniax/circle/profile/=/maker_id/${makerId}.html`)
+          const isProfilePage = profileHtml.includes('サークルプロフィール') || profileHtml.includes('のプロフィール')
+          if (isProfilePage) {
+            const profileMatch =
+              profileHtml.match(/「([^」]+)」のプロフィール/) ||
+              profileHtml.match(/<title>([^|]+?)\s*サークルプロフィール/)
+            if (profileMatch) circle = profileMatch[1].replace(/<[^>]+>/g, '').trim()
+          }
+        } catch { /* ignore */ }
+      }
+    }
+    if (!circle && isWorkPage) {
+      const circleMatch = html.match(/class="maker_name"[^>]*>[^<]*<a[^>]*>([^<]+)<\/a>/)
+      circle = circleMatch ? circleMatch[1].trim() : ''
+    }
 
     // ── Tags (ジャンル) ──────────────────────────────────────────────────────
     const tags: string[] = []
-    // Method 1: table row with ジャンル header
-    const genreRowMatch = html.match(/<th[^>]*>\s*ジャンル\s*<\/th>\s*<td[^>]*>([\s\S]{0,3000}?)<\/td>/)
-    if (genreRowMatch) {
-      for (const m of genreRowMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)) {
-        const tag = m[1].trim()
-        if (tag && tag.length < 50) tags.push(tag)
-      }
-    }
-    // Method 2: work_genre / main_genre class (fallback)
-    if (tags.length === 0) {
-      for (const m of html.matchAll(/class="(?:work_genre|main_genre)"[^>]*>([\s\S]{0,2000}?)<\/(?:div|ul)>/g)) {
-        for (const a of m[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)) {
-          const tag = a[1].trim()
+    if (isWorkPage) {
+      // Method 1: table row with ジャンル header
+      const genreRowMatch = html.match(/<th[^>]*>\s*ジャンル\s*<\/th>\s*<td[^>]*>([\s\S]{0,3000}?)<\/td>/)
+      if (genreRowMatch) {
+        for (const m of genreRowMatch[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)) {
+          const tag = m[1].trim()
           if (tag && tag.length < 50) tags.push(tag)
         }
       }
+      // Method 2: work_genre / main_genre class (fallback)
+      if (tags.length === 0) {
+        for (const m of html.matchAll(/class="(?:work_genre|main_genre)"[^>]*>([\s\S]{0,2000}?)<\/(?:div|ul)>/g)) {
+          for (const a of m[1].matchAll(/<a[^>]*>([^<]+)<\/a>/g)) {
+            const tag = a[1].trim()
+            if (tag && tag.length < 50) tags.push(tag)
+          }
+        }
+      }
+      if (tags.length > 50) tags.length = 50
     }
-    // Limit total tags
-    if (tags.length > 50) tags.length = 50
 
     // ── Work type (作品形式) ──────────────────────────────────────────────
     let workType: string | null = null
-    {
-      // Extract work_outline table; fall back to full page
+    if (isWorkPage) {
       const outlineSection = html.match(/<(?:table|tbody)[^>]*id="work_outline"[^>]*>([\s\S]{0,20000}?)<\/(?:table|tbody)>/)
       const searchIn = outlineSection ? outlineSection[1] : html
-      // Split into <tr> blocks and find the one containing 作品形式
       for (const row of searchIn.split(/<\/tr>/i)) {
         if (/作品形式/.test(row)) {
           const links: string[] = []
@@ -479,32 +550,41 @@ async function fetchDLsiteInfo(
         }
       }
     }
+    if (!workType && typeof apiData?.work_type === 'string') workType = apiData.work_type
 
     // ── DLsite community rating ──────────────────────────────────────────
-    const dlsiteRatingMatch =
+    const dlsiteRatingMatch = isWorkPage ? (
       html.match(/"ratingValue"\s*:\s*"([0-9.]+)"/) ||
       html.match(/class="[^"]*count_average[^"]*"[^>]*>\s*([0-9.]+)\s*</) ||
       html.match(/itemprop="ratingValue"[^>]*content="([^"]+)"/)
-    const dlsiteRating = dlsiteRatingMatch ? dlsiteRatingMatch[1].trim() : null
+    ) : null
+    const dlsiteRating = dlsiteRatingMatch
+      ? dlsiteRatingMatch[1].trim()
+      : (typeof apiData?.rate_average_2dp === 'number' ? String(apiData.rate_average_2dp) : (typeof apiData?.rating === 'number' ? String(apiData.rating) : null))
 
     // ── Release date (販売日) ────────────────────────────────────────────
     let releaseDate: string | null = null
-    const releaseDateRow = html.match(/<th[^>]*>\s*販売日\s*<\/th>\s*<td[^>]*>([\s\S]{0,300}?)<\/td>/)
-    if (releaseDateRow) {
-      releaseDate = releaseDateRow[1].replace(/<[^>]+>/g, '').trim() || null
+    if (isWorkPage) {
+      const releaseDateRow = html.match(/<th[^>]*>\s*販売日\s*<\/th>\s*<td[^>]*>([\s\S]{0,300}?)<\/td>/)
+      if (releaseDateRow) releaseDate = releaseDateRow[1].replace(/<[^>]+>/g, '').trim() || null
+      if (!releaseDate) {
+        const rdMatch =
+          html.match(/itemprop="datePublished"[^>]*content="([^"]+)"/) ||
+          html.match(/(\d{4}年\d{1,2}月\d{1,2}日)/)
+        releaseDate = rdMatch ? rdMatch[1].trim() : null
+      }
     }
-    if (!releaseDate) {
-      const rdMatch =
-        html.match(/itemprop="datePublished"[^>]*content="([^"]+)"/) ||
-        html.match(/(\d{4}年\d{1,2}月\d{1,2}日)/)
-      releaseDate = rdMatch ? rdMatch[1].trim() : null
+    if (!releaseDate && typeof apiData?.registration_date === 'string') {
+      releaseDate = apiData.registration_date
     }
 
-    // Collect all sample image URLs (deduplicated, preserving order)
+    // ── Sample images ────────────────────────────────────────────────────
     const smpUrlMap = new Map<string, string>() // smpKey → full URL
-    for (const m of html.matchAll(/((?:https?:)?\/\/img\.dlsite\.jp[^"'\s<>]+_img_(smp\d+)\.[a-z]+)/gi)) {
-      const smpKey = m[2].toLowerCase()
-      if (!smpUrlMap.has(smpKey)) smpUrlMap.set(smpKey, m[1])
+    if (isWorkPage) {
+      for (const m of html.matchAll(/((?:https?:)?\/\/img\.dlsite\.jp[^"'\s<>]+_img_(smp\d+)\.[a-z]+)/gi)) {
+        const smpKey = m[2].toLowerCase()
+        if (!smpUrlMap.has(smpKey)) smpUrlMap.set(smpKey, m[1])
+      }
     }
 
     // Per-game image subdirectory: game-images/{code}/

@@ -239,10 +239,12 @@ interface Game {
 **解壓縮編碼**：使用 `7za -mcp=932`，正確處理日文 Shift-JIS 編碼的 ZIP 檔名。
 
 ### DLsite 爬蟲
-- 網址：RJ→`/maniax/`、VJ→`/home/`、BJ→`/boys-love/`
+- **兩階段抓取**：先呼叫 `product/info/ajax?product_id={code}&lang=ja_JP` API 取得 `site_id`（`maniax`/`aix`/`home` 等），再用正確的站點 URL 抓 HTML
+  - AI 生成作品的 `site_id` 為 `aix`，若直接打 `maniax` URL 會回傳「ユーザー限定コンテンツ」導致資料錯誤
 - Cookie：`locale=ja_JP`（日文原文，tags 為日文）
-- 標題：去掉 `[社團名]` 後綴和 `| DLsite...` 後綴
-- 抓取：og:title、og:image、`.maker_name`、`ジャンル` tags（3 種方式）、`作品形式`、DLsite 評分、`販売日`
+- **標題**：優先用 API 的 `work_name`（無促銷標籤）；fallback 用 og:title 並額外去掉 `【XX%OFF】` 促銷前綴、`[社團名]` 後綴、`| DLsite...` 後綴
+- 抓取：og:title/og:image、`.maker_name`、`ジャンル` tags（3 種方式）、`作品形式`、DLsite 評分、`販売日`
+- **API fallback**：circle / workType / dlsiteRating / releaseDate 無法從 HTML 取得時，用 API 的 maker_name / work_type / rating / registration_date 補充
 - 圖片存到 `game-images/{code}/`（`main.jpg` + `sam.jpg` + `smp1/smp2`...）
 - `sam.jpg`：由 cover URL 將 `_img_main` 替換為 `_img_sam` 取得，作為列表縮圖
 
@@ -458,6 +460,11 @@ interface Game {
 24. **Sakura 翻譯架構**：Sakura 模型訓練資料以簡體中文為主，prompt 無法強制輸出繁體。正確做法：一律用簡體 prompt 翻譯 → `zh-TW` 時用 `opencc-js` Converter(`{from:'cn', to:'tw'}`) 做 post-process。`callSakuraApi()` 已內含此邏輯。
 25. **翻譯 in-place**：`translateDescriptionHtml()` 是主程式端的共用函數（module level），萃取 HTML 文字節點（`/>([^<]+)</g`）→ 逐節點翻譯 → 替換回 HTML → 覆寫 `description.html`；`games:fetchInfo` 和 `games:translateDescription` 都呼叫此函數，確保行為一致。
 26. **prevUuidRef bug**：`GameDetail` 的 `prevUuidRef = useRef('')`（不可用 `useRef(game.uuid)`）；用 game.uuid 初始化時，第一次 mount `uuidChanged=false`，導致 `loadDescription` 不被呼叫，介紹無法顯示。
+27. **DLsite AIX（AI 生成作品）非日本 IP 問題**：AIX 頁面對非日本 IP 一律重定向到 DLsite 首頁，HTML 解析會拿到首頁垃圾資料（標題、圖片、tags 全錯，社團欄甚至出現熱門同人圈名稱）。解法：
+    - `isWorkPage = html.includes('work_outline')`（作品頁獨有 table id）偵測是否真正拿到作品頁，若否則跳過所有 HTML 解析
+    - 標題、圖片、發售日、作品形式全部改用 `product/info/ajax` API 資料
+    - 社團名：先在作品頁 HTML 找 `maker_id/{id}` 連結；找不到則另外請求 `maniax/circle/profile/=/maker_id/{id}.html`（maniax 不受 geo-block），並去除抓到的 HTML tags（`<span class="original_name">` 等）
+    - AIX 作品的 tags 在非日本 IP 下無法取得（頁面被封鎖）
 
 ---
 
