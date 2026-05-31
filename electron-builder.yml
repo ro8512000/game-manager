@@ -12,6 +12,9 @@ files:
   - node_modules/7zip-bin/index.js
   - node_modules/7zip-bin/index.d.ts
   - node_modules/7zip-bin/win/x64/7za.exe
+  - node_modules/opencc-js/package.json
+  - node_modules/opencc-js/dist/umd/package.json
+  - node_modules/opencc-js/dist/umd/full.js
 asarUnpack:
   - node_modules/7zip-bin/**
 win:

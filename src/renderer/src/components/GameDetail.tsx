@@ -34,6 +34,8 @@ export default function GameDetail({ game, settings, onUpdate, onDelete, onClose
   const [titleInput, setTitleInput] = useState(game.title)
   const [editingId, setEditingId] = useState(false)
   const [idInput, setIdInput] = useState(game.id)
+  const [editingReleaseDate, setEditingReleaseDate] = useState(false)
+  const [releaseDateInput, setReleaseDateInput] = useState(game.releaseDate ?? '')
   const [refetching, setRefetching] = useState(false)
   const [refetchProgress, setRefetchProgress] = useState<{ msg: string; pct: number } | null>(null)
   const [tagInput, setTagInput] = useState('')
@@ -55,12 +57,14 @@ export default function GameDetail({ game, settings, onUpdate, onDelete, onClose
     setEditableTags(game.tags)
     setTitleInput(game.title)
     setIdInput(game.id)
+    setReleaseDateInput(game.releaseDate ?? '')
     setRefetching(false)
     setRefetchProgress(null)
 
     if (uuidChanged) {
       setEditingTitle(false)
       setEditingId(false)
+      setEditingReleaseDate(false)
       setTagInput('')
       setShowTagSuggestions(false)
       setTagEditMode(false)
@@ -120,6 +124,12 @@ export default function GameDetail({ game, settings, onUpdate, onDelete, onClose
     setEditingId(false)
     const newId = idInput.trim().toUpperCase()
     if (newId && newId !== game.id) onUpdate({ ...game, id: newId })
+  }
+
+  const handleSaveReleaseDate = (): void => {
+    setEditingReleaseDate(false)
+    const val = releaseDateInput.trim() || null
+    if (val !== game.releaseDate) onUpdate({ ...game, releaseDate: val })
   }
 
   const handleRefetchInfo = async (): Promise<void> => {
@@ -627,12 +637,31 @@ export default function GameDetail({ game, settings, onUpdate, onDelete, onClose
         </div>
 
         <div className="detail-stats">
-          {game.releaseDate && (
-            <div className="stat-row">
-              <span className="stat-label">發售日</span>
-              <span className="stat-value">{game.releaseDate}</span>
-            </div>
-          )}
+          <div className="stat-row">
+            <span className="stat-label">發售日</span>
+            {editingReleaseDate ? (
+              <input
+                type="date"
+                className="stat-date-input"
+                value={releaseDateInput}
+                onChange={(e) => setReleaseDateInput(e.target.value)}
+                onBlur={handleSaveReleaseDate}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur()
+                  if (e.key === 'Escape') { setReleaseDateInput(game.releaseDate ?? ''); setEditingReleaseDate(false) }
+                }}
+                autoFocus
+              />
+            ) : (
+              <span
+                className="stat-value editable"
+                onClick={() => setEditingReleaseDate(true)}
+                title="點擊編輯發售日"
+              >
+                {game.releaseDate || '未設定'}
+              </span>
+            )}
+          </div>
           {game.dlsiteRating && (
             <div className="stat-row">
               <span className="stat-label">DLsite 評分</span>

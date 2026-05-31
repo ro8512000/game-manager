@@ -1462,3 +1462,6 @@ button.primary:hover { background: var(--accent-hover); }
 }
 .stat-label { color: var(--text2); }
 .stat-value { color: var(--text); font-weight: 500; }
+.stat-value.editable { cursor: text; border-radius: 3px; padding: 1px 3px; margin: -1px -3px; }
+.stat-value.editable:hover { background: var(--bg3); }
+.stat-date-input { background: var(--bg3); border: 1px solid var(--border); color: var(--text); border-radius: 3px; padding: 1px 4px; font-size: 11px; }

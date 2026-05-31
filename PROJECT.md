@@ -347,7 +347,7 @@ interface Game {
 
 ### GameDetail（右側面板）
 - 可拖拉左邊緣調整寬度（220~600px），持久化
-- **代碼可編輯**（點擊），標題可編輯（點擊）
+- **代碼可編輯**（點擊），標題可編輯（點擊），**發售日可編輯**（點擊 stat-row 的發售日值，彈出 `<input type="date">`，Enter/Blur 儲存，Escape 取消）
 - **↻ 重新抓取資訊**（DLsite/Steam/Getchu 遊戲），顯示進度條
 - **圖片預覽**：最大高度 420px，超高圖片自動縮限（`object-fit: contain`）
 - **圖片管理**：
